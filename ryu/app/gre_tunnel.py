@@ -592,6 +592,9 @@ class GRETunnel(app_manager.RyuApp):
 
             # TUNNEL_OUT_TABLE: broadcast
             rule = cls_rule(tun_id=tunnel_key, dl_dst=mac.BROADCAST)
+            ipv6_rule = cls_rule(tun_id=tunnel_key, dl_type=0x86dd,
+                                 ipv6_dst=[0xff00,0,0,0,0,0,0,0],ipv6_dst_mask=[0xff00,0,0,0,0,0,0,0])
+            
             actions = [ofproto_parser.OFPActionOutput(tunnel_port_no)
                        for tunnel_port_no
                        in self._list_tunnel_port(dp, remote_dpids)]
@@ -599,6 +602,9 @@ class GRETunnel(app_manager.RyuApp):
                 in_port=ofproto.OFPP_IN_PORT, table=self.LOCAL_OUT_TABLE)
             actions.append(resubmit_table)
             self.send_flow_mod(dp, rule, self.TUNNEL_OUT_TABLE,
+                               ofproto.OFPFC_ADD,
+                               self.TUNNEL_OUT_PRI_BROADCAST, actions)
+            self.send_flow_mod(dp, ipv6_rule, self.TUNNEL_OUT_TABLE,
                                ofproto.OFPFC_ADD,
                                self.TUNNEL_OUT_PRI_BROADCAST, actions)
 
@@ -668,6 +674,8 @@ class GRETunnel(app_manager.RyuApp):
 
             # TUNNEL_OUT_TABLE: broadcast
             rule = cls_rule(tun_id=ev.tunnel_key, dl_dst=mac.BROADCAST)
+            ipv6_rule = cls_rule(tun_id=ev.tunnel_key, dl_type=0x86dd,
+                                 ipv6_dst=[0xff00,0,0,0,0,0,0,0],ipv6_dst_mask=[0xff00,0,0,0,0,0,0,0])
             tunnel_ports = self._list_tunnel_port(remote_dp, remote_dpids)
             if tunnel_port_no not in tunnel_ports:
                 tunnel_ports.append(tunnel_port_no)
@@ -682,6 +690,8 @@ class GRETunnel(app_manager.RyuApp):
                 table=self.LOCAL_OUT_TABLE)
             actions.append(resubmit_table)
             self.send_flow_mod(remote_dp, rule, self.TUNNEL_OUT_TABLE,
+                               command, self.TUNNEL_OUT_PRI_BROADCAST, actions)
+            self.send_flow_mod(remote_dp, ipv6_rule, self.TUNNEL_OUT_TABLE,
                                command, self.TUNNEL_OUT_PRI_BROADCAST, actions)
 
             # TUNNEL_OUT_TABLE: multicast TODO:XXX
@@ -755,11 +765,16 @@ class GRETunnel(app_manager.RyuApp):
 
             # LOCAL_OUT_TABLE: broadcast
             rule = cls_rule(tun_id=tunnel_key, dl_dst=mac.BROADCAST)
+            ipv6_rule = cls_rule(tun_id=tunnel_key, dl_type=0x86dd,
+                                 ipv6_dst=[0xff00,0,0,0,0,0,0,0],ipv6_dst_mask=[0xff00,0,0,0,0,0,0,0])
             actions = [ofproto_parser.OFPActionOutput(port_no)
                        for port_no in local_ports]
             self.send_flow_mod(dp, rule, self.LOCAL_OUT_TABLE,
                                ofproto.OFPFC_MODIFY_STRICT,
                                self.LOCAL_OUT_PRI_BROADCAST, actions)
+            self.send_flow_mod(dp, ipv6_rule, self.LOCAL_OUT_TABLE,
+                               ofproto.OFPFC_MODIFY_STRICT,
+                               self.LOCAL_OUT_PRI_BROADCAST, actions)                   
 
             # LOCAL_OUT_TABLE: multicast TODO:XXX
 
@@ -797,6 +812,8 @@ class GRETunnel(app_manager.RyuApp):
                 # TUNNEL_OUT_TABLE: broadcast
                 #                   tunnel_ports.remove(tunnel_port_no)
                 rule = cls_rule(tun_id=tunnel_key, dl_dst=mac.BROADCAST)
+                ipv6_rule = cls_rule(tun_id=tunnel_key, dl_type=0x86dd,
+                                 ipv6_dst=[0xff00,0,0,0,0,0,0,0],ipv6_dst_mask=[0xff00,0,0,0,0,0,0,0])
                 tunnel_ports = self._list_tunnel_port(remote_dp,
                                                       remote_dpids)
                 assert tunnel_port_no not in tunnel_ports
@@ -814,6 +831,10 @@ class GRETunnel(app_manager.RyuApp):
                 self.send_flow_mod(remote_dp, rule, self.TUNNEL_OUT_TABLE,
                                    command, self.TUNNEL_OUT_PRI_BROADCAST,
                                    actions)
+                self.send_flow_mod(remote_dp, ipv6_rule, self.TUNNEL_OUT_TABLE,
+                                   command, self.TUNNEL_OUT_PRI_BROADCAST,
+                                   actions)
+                   
 
             # TUNNEL_OUT_TABLE: unicast
             # live-migration: there can be more than one (dpid, port_no)
@@ -908,6 +929,8 @@ class GRETunnel(app_manager.RyuApp):
             remote_dpids.remove(dpid)
 
             rule = cls_rule(tun_id=tunnel_key, dl_dst=mac.BROADCAST)
+            ipv6_rule = cls_rule(tun_id=tunnel_key, dl_type=0x86dd,
+                                 ipv6_dst=[0xff00,0,0,0,0,0,0,0],ipv6_dst_mask=[0xff00,0,0,0,0,0,0,0])
             tunnel_ports = self._list_tunnel_port(dp, remote_dpids)
             if ev.port_no not in tunnel_ports:
                 tunnel_ports.append(ev.port_no)
@@ -922,6 +945,8 @@ class GRETunnel(app_manager.RyuApp):
                 command = ofproto.OFPFC_MODIFY_STRICT
             self.send_flow_mod(dp, rule, self.TUNNEL_OUT_TABLE,
                                command, self.TUNNEL_OUT_PRI_BROADCAST, actions)
+            self.send_flow_mod(dp, ipv6_rule, self.TUNNEL_OUT_TABLE,
+                               command, self.TUNNEL_OUT_PRI_BROADCAST, actions)                   
 
             # TUNNEL_OUT_TABLE: multicast TODO:XXX
 
