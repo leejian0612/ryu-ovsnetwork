@@ -17,12 +17,12 @@
 
 import netaddr
 
-from quantum.common import constants as q_const
-from quantum.common import utils
-from quantum.db import models_v2
+from neutron.common import constants as q_const
+from neutron.common import utils
+from neutron.db import models_v2
 import ovsnetwork_db
-from quantum.extensions import securitygroup as ext_sg
-from quantum.openstack.common import log as logging
+from neutron.extensions import securitygroup as ext_sg
+from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -37,5 +37,5 @@ class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
         return ovs_network
     
 
-class OVSServerRpcCallbackMixin(object):
+class OVSNetworkServerRpcCallbackMixin(object):
     pass    

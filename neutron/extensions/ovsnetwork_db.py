@@ -14,30 +14,82 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 #
-# @author: Aaron Rosen, Nicira, Inc
+# @author: Jian LI, BUPT
 
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.orm import exc
-from sqlalchemy.orm import scoped_session
+from sqlalchemy import UniqueConstraint
 
-from quantum.api.v2 import attributes as attr
-from quantum.db import db_base_plugin_v2
-from quantum.db import model_base
-from quantum.db import models_v2
+from neutron.api.v2 import attributes as attr
+from neutron.db import db_base_plugin_v2
+from neutron.db import model_base
+from neutron.db import models_v2
 
 import ovsnetwork as ext_ovsnetwork
-from quantum.openstack.common import uuidutils
+from neutron.openstack.common import uuidutils
 
-class OVSNetwork(model_base.BASEV2,models_v2.HasId,models_v2.HasTenant):
-    id = sa.Column(sa.String(36),
-                   sa.ForeignKey("networks.id",ondelete='CASCADE'),
-                   primary_key=True)
+class OVSNetwork(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
+    #id = sa.Column(sa.String(36),
+                   #sa.ForeignKey("networks.id", ondelete='CASCADE'),
+                   #primary_key=True)
+    name = sa.Column(sa.String(255))
+    host = sa.Column(sa.String(255), nullable=False)
     controller_ipv4_address = sa.Column(sa.String(36))
     controller_port_num = sa.Column(sa.Integer) 
+    __table_args__ = (
+        UniqueConstraint("name", "tenant_id"),
+    )
+
+class VMLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
+    name = sa.Column(sa.String(255))
+    local_port_id = sa.Column(sa.String(36),
+                    sa.ForeignKey("ports.id", ondelete='CASCADE'))
+    remote_port_id = sa.Column(sa.String(36),
+                     sa.ForeignKey("ports.id", ondelete='CASCADE'))
+    local_host = sa.Column(sa.String(255), nullable=False)
+    remote_host = sa.Column(sa.String(255), nullable=False)
+    ovs_network_id = sa.Column(sa.String(36),
+                               sa.ForeignKey("ovsnetworks.id", ondelete='CASCADE'))
+    ovs_network_name = sa.Column(sa.String(36),
+                                 sa.ForeignKey("ovsnetworks.name", ondelete='CASCADE'))
+    __table_args__ = (
+        UniqueConstraint("name", "tenant_id"),
+    )
+
+class OVSLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
+    name = sa.Column(sa.String(255))
+    left_port_id = sa.Column(sa.String(36),
+                   sa.ForeignKey("ports.id", ondelete='CASCADE'))
+    right_port_id = sa.Column(sa.String(36),
+                    sa.ForeignKey("ports.id", ondelete='CASCADE'))
+    left_ovs_id = sa.Column(sa.String(36), nullable=False,
+                            sa.ForeignKey("ovsnetworks.id", ondelete='CASCADE')
+    right_ovs_id = sa.Column(sa.String(36), nullable=False,
+                             sa.ForeignKey("ovsnetworks.id", ondelete='CASCADE')
+    left_ovs_name = sa.Column(sa.String(36),
+                              sa.ForeignKey("ovsnetworks.name", ondelete='CASCADE'))
+    right_ovs_name = sa.Column(sa.String(36),
+                               sa.ForeignKey("ovsnetworks.name", ondelete='CASCADE'))
+    __table_args__ = (
+        UniqueConstraint("name", "tenant_id"),
+    )
+
 
 class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
-    """Mixin class to add ovs extension to db_plugin_base_v2."""
+    """Mixin class to add ovs network extension to db_plugin_base_v2."""
+
+    def create_ovs_network(self, context, ovs_network):
+        ovs_network = ovs_network['ovs_network']
+        tenant_id = self._get_tenant_id_for_create(context, ovs_network)
+        with context.session.begin(subtransactions=True):
+            ovs_network_db = OVSNetwork(id = uuidutils.generate_uuid(),
+                                        tenant_id = tenant_id,
+                                        name = ovs_network['name'],
+                                        host = ovs_network['host'],
+                                        controller_ipv4_address = ovs_network['controller_ipv4_address'],
+                                        controller_ipv4_port = ovs_network['controller_ipv4_port'])
+
     def _get_ovsnetwork(self, context, id):
         try:
             query = self._model_query(context, OVSNetwork)
@@ -52,7 +104,8 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
                'tenant_id':ovsnetwork['tenant_id'],
                'controller_ipv4_address': ovsnetwork.get('controller_ipv4_address',None),
                'controller_port_num': ovsnetwork.get('controller_port_num',None),
-               'tunnel_key':ovsnetwork.get('tunnel_key',None)}       
+               #'tunnel_key':ovsnetwork.get('tunnel_key',None)
+              }       
         return self._fields(res, fields)        
               
     def get_ovsnetwork(self, context, id, fields=None):
@@ -92,10 +145,10 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         
        #print "network is: ",network
        #print "\nnetwork_id is",network.get('id',None)
-        ovs_network = OVSNetwork(id = network.get('id'),
-                                 tenant_id = network.get('tenant_id'))
-        with context.session.begin(subtransactions=True):
-            context.session.add(ovs_network) 
+       ovs_network = OVSNetwork(id = network.get('id'),
+                                tenant_id = network.get('tenant_id'))
+       with context.session.begin(subtransactions=True):
+           context.session.add(ovs_network) 
     
             
 '''    
