@@ -15,18 +15,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 #
-# @author: Dan Wendlandt, Nicira, Inc
+# @author: Jian LI, BUPT
 #
 from abc import ABCMeta
 from abc import abstractmethod
 
 from oslo.config import cfg
+import six
 
-from quantum.api import extensions
-from quantum.api.v2 import attributes as attr
-from quantum.api.v2 import base
-from quantum.common import exceptions as qexception
-from quantum import manager
+from neutron.api import extensions
+from neutron.api.v2 import attributes as attr
+from neutron.api.v2 import base
+from neutron.common import exceptions as qexception
+from neutron import manager
 
 class OVSNetworkNotFound(qexception.NotFound):
     message = _("OVS Network %(id)s could not be found")
@@ -47,9 +48,8 @@ def convert_to_validate_port_num(port):
     else:
         raise InvalidPortNum(port=port)
         
-OVSNETWORKS = 'ovsnetworks'
 RESOURCE_ATTRIBUTE_MAP = {
-    OVSNETWORKS : {
+    'ovs_networks' : {
     'id': {'allow_post': False, 'allow_put': False,
            'validate': {'type:uuid': None},
            'is_visible': True,
@@ -80,18 +80,17 @@ EXTENDED_ATTRIBUTES_2_0 = {
                 }
 }
 #we need extend port resource and add connect_to_ovs action to it
-#qovs quantum ovs Capitalize first letter
 
 class Ovsnetwork(extensions.ExtensionDescriptor):
     """OVS Network extension."""
 
     @classmethod
     def get_name(cls):
-        return "OVS Network"
+        return "ovs-network"
 
     @classmethod
     def get_alias(cls):
-        return "OVSNETWORK"
+        return "ovs-network"
 
     @classmethod
     def get_description(cls):
@@ -100,59 +99,58 @@ class Ovsnetwork(extensions.ExtensionDescriptor):
     @classmethod
     def get_namespace(cls):
         # todo
-        return "http://docs.openstack.org/ext/securitygroups/api/v2.0"
+        return "https://github.com/leejian0612/ryu-ovsnetwork/blob/master/README.md"
 
     @classmethod
     def get_updated(cls):
-        return "2012-10-05T10:00:00-00:00"
+        return "2014-10-08T19:55:00-00:00"
         
     @classmethod    
     def get_resources(cls):
         """Returns Ext Resources."""
-        #my_plurals = [(key, key[:-1]) for key in RESOURCE_ATTRIBUTE_MAP.keys()]
-        my_plurals = [('ovsnetworks','ovsnetwork')]
+        my_plurals = [(key, key[:-1]) for key in RESOURCE_ATTRIBUTE_MAP.keys()]
         attr.PLURALS.update(dict(my_plurals))
         exts = []
-        plugin = manager.QuantumManager.get_plugin()
-        #for resource_name in ['security_group', 'security_group_rule']:
-        #collection_name = resource_name.replace('_', '-') + "s"
-        resource_name = 'ovsnetwork'
-        collection_name = 'ovsnetworks'
-        params = RESOURCE_ATTRIBUTE_MAP.get(collection_name, dict())
-        #quota.QUOTAS.register_resource_by_name(resource_name)
-        controller = base.create_resource(collection_name,
-                                          resource_name,
-                                          plugin, params, allow_bulk=True,
-                                          allow_pagination=True,
-                                          allow_sorting=True)
+        plugin = manager.NeutronManager.get_plugin()
+        for resource_name in ['ovs_network']:
+            collection_name = resource_name.replace('_', '-') + "s"
+            params = RESOURCE_ATTRIBUTE_MAP.get(collection_name, dict())
+            #quota.QUOTAS.register_resource_by_name(resource_name)
+            controller = base.create_resource(collection_name,
+                                              resource_name,
+                                              plugin, params, allow_bulk=True,
+                                              allow_pagination=True,
+                                              allow_sorting=True)
         
-        ex = extensions.ResourceExtension(collection_name,
-                                          controller,
-                                          attr_map=params)
-        exts.append(ex)
+            ex = extensions.ResourceExtension(collection_name,
+                                              controller,
+                                              attr_map=params)
+            exts.append(ex)
 
         return exts
 
     def get_extended_resources(self, version):
         if version == "2.0":
-            return EXTENDED_ATTRIBUTES_2_0   
+            return dict(EXTENDED_ATTRIBUTES_2_0.items() +
+                        RESOURCE_ATTRIBUTE_MAP.items())
         else:
             return {}  
 
+
+@six.add_metaclass(ABCMeta)
 class OVSNetworkPluginBase(object):
-    __metaclass__ = ABCMeta
 
     @abstractmethod
-    def get_ovsnetworks(self, context, filters=None, fields=None,
+    def get_ovs_networks(self, context, filters=None, fields=None,
                         sorts=None, limit=None, marker=None,
                         page_reverse=False):
         pass    
 
     @abstractmethod
-    def get_ovsnetwork(self, context, id, fields=None):
+    def get_ovs_network(self, context, id, fields=None):
         pass    
         
     @abstractmethod
-    def update_ovsnetwork(self, context, id, ovsnetwork):
+    def update_ovs_network(self, context, id, ovsnetwork):
         pass   
        

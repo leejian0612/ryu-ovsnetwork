@@ -14,20 +14,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 #
-# @author: Aaron Rosen, Nicira, Inc
+# @author: Jian LI, BUPT
 
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.orm import exc
 from sqlalchemy.orm import scoped_session
 
-from quantum.api.v2 import attributes as attr
-from quantum.db import db_base_plugin_v2
-from quantum.db import model_base
-from quantum.db import models_v2
+from neutron.api.v2 import attributes as attr
+from neutron.db import db_base_plugin_v2
+from neutron.db import model_base
+from neutron.db import models_v2
 
 import ovsnetwork as ext_ovsnetwork
-from quantum.openstack.common import uuidutils
+from neutron.openstack.common import uuidutils
 
 class OVSNetwork(model_base.BASEV2,models_v2.HasId,models_v2.HasTenant):
     id = sa.Column(sa.String(36),
@@ -37,7 +37,7 @@ class OVSNetwork(model_base.BASEV2,models_v2.HasId,models_v2.HasTenant):
     controller_port_num = sa.Column(sa.Integer) 
 
 class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
-    """Mixin class to add ovs extension to db_plugin_base_v2."""
+    """Mixin class to add ovs network extension to db_plugin_base_v2."""
     def _get_ovsnetwork(self, context, id):
         try:
             query = self._model_query(context, OVSNetwork)
@@ -52,7 +52,8 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
                'tenant_id':ovsnetwork['tenant_id'],
                'controller_ipv4_address': ovsnetwork.get('controller_ipv4_address',None),
                'controller_port_num': ovsnetwork.get('controller_port_num',None),
-               'tunnel_key':ovsnetwork.get('tunnel_key',None)}       
+               #'tunnel_key':ovsnetwork.get('tunnel_key',None)
+              }       
         return self._fields(res, fields)        
               
     def get_ovsnetwork(self, context, id, fields=None):
@@ -92,10 +93,10 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         
        #print "network is: ",network
        #print "\nnetwork_id is",network.get('id',None)
-        ovs_network = OVSNetwork(id = network.get('id'),
-                                 tenant_id = network.get('tenant_id'))
-        with context.session.begin(subtransactions=True):
-            context.session.add(ovs_network) 
+       ovs_network = OVSNetwork(id = network.get('id'),
+                                tenant_id = network.get('tenant_id'))
+       with context.session.begin(subtransactions=True):
+           context.session.add(ovs_network) 
     
             
 '''    
