@@ -60,95 +60,68 @@ RESOURCE_ATTRIBUTE_MAP = {
         'tenant_id': {'allow_post': True, 'allow_put': False,
                       'validate': {'type:string': None},
                       'is_visible': True},
-        'controller_ipv4_address': {'allow_post': True, 
-                                    'allow_put': True,
-                                    'validate': {'type:ip_address_or_none': None},
-                                    'is_visible': True,
-                                    'default':None},
-        'controller_port_num': {'allow_post': True,
-                                'allow_put': True,
-                                'convert_to': convert_to_validate_port_num,
-                                'is_visible': True,
-                                'default':None},
-        'host': {'allow_post': True,
-                 'allow_put': False,
-                 'validate':{'type:string': None},
-                 'is_visible': True}
+        'host': {'allow_post': True, 'allow_put': False,
+                 'validate': {'type:string': None},
+                 'is_visible': True},
+        'controller_ipv4_address':{'allow_post': True, 
+                                   'allow_put': True,
+                                   'validate': {'type:ip_address_or_none': None},
+                                   'is_visible': True,
+                                   'default':None},
+        'controller_port_num':{'allow_post': True,
+                               'allow_put': True,
+                               'convert_to': convert_to_validate_port_num,
+                               'is_visible': True,
+                               'default':None}
     }
-    'vm_links': {
+    'vm_links' : {
         'id': {'allow_post': False, 'allow_put': False,
                'validate': {'type:uuid': None},
                'is_visible': True,
                'primary_key': True},
-        'name': {'allow_post': True, 'allow_put': True,
-                 'validate': {'type:string': None},
-                 'is_visible': True},
         'tenant_id': {'allow_post': True, 'allow_put': False,
                       'validate': {'type:string': None},
                       'is_visible': True},
-        'local_port_id': {'allow_post': False, 'allow_put': False,
-                          'validate': {'type:uuid': None},
-                          'is_visible': True},
-        'remote_port_id': {'allow_post': False, 'allow_put': False,
-                           'validate': {'type:uuid': None},
+        'name': {'allow_post': True, 'allow_put': True,
+                 'validate': {'type:string': None},
+                 'is_visible': True},
+        'ovs_network_id': {'allow_post': True, 'allow_put': False,
+                           'validate': {'type:string': None},
                            'is_visible': True},
-        'local_host': {'allow_post': False, 'allow_put': False,
-                       'validata': {'type:string': None},
-                       'is_visible': False}, 
-        'remote_host': {'allow_post': False, 'allow_put': False,
-                        'validata': {'type:string': None},
-                        'is_visible': False}
-        'ovs_network_id': {'allow_post': True, 'allow_put': True,
-                           'validate': {'type:uuid': None},
-                           'is_visible': True}
         'ovs_network_name': {'allow_post': True, 'allow_put': True,
-                             'validate': {'type:uuid': None},
+                             'validate': {'type:string': None},
                              'is_visible': True}
     }
-    'ovs_links':{
+    'ovs_links' : {
         'id': {'allow_post': False, 'allow_put': False,
                'validate': {'type:uuid': None},
                'is_visible': True,
                'primary_key': True},
+          
+        'tenant_id': {'allow_post': False, 'allow_put': False,
+                      'validate': {'type:string': None},
+                      'is_visible': True},
         'name': {'allow_post': True, 'allow_put': True,
                  'validate': {'type:string': None},
                  'is_visible': True},
-        'tenant_id': {'allow_post': True, 'allow_put': False,
-                      'validate': {'type:string': None},
-                      'is_visible': True},
-        'left_port_id': {'allow_post': False, 'allow_put': False,
-                         'validate': {'type:uuid': None},
-                         'is_visible': True},
-        'right_port_id': {'allow_post': False, 'allow_put': False,
-                          'validate': {'type:uuid': None},
-                          'is_visible': True},
-        'left_ovs_id': {'allow_post': True, 'allow_put': True,
-                        'validate': {'type:uuid': None},
-                        'is_visible': True}, 
-        'right_ovs_id': {'allow_post': True, 'allow_put': True,
-                         'validate': {'type:uuid': None},
-                         'is_visible': True}
+        'left_ovs_id': {'allow_post': True, 'allow_put': False,
+                        'validate': {'type:string': None},
+                        'is_visible': True},
         'left_ovs_name': {'allow_post': True, 'allow_put': True,
                           'validate': {'type:string': None},
-                          'is_visible': True}
+                          'is_visible': True},
+        'right_ovs_id': {'allow_post': True, 'allow_put': False,
+                         'validate': {'type:string': None},
+                         'is_visible': True},
         'right_ovs_name': {'allow_post': True, 'allow_put': True,
                            'validate': {'type:string': None},
                            'is_visible': True}
     }
 }
 
-EXTENDED_ATTRIBUTES_2_0 = {
-    'networks': {'enable_ovs': {'allow_post': True,'allow_put': False,
-                                'is_visible': True,
-                                'convert_to': attr.convert_to_boolean,
-                                'default': False} 
-    'ports': {'link_id': {'allow_post': False,'allow_put': False,
-                          'validate': {'type:uuid': None}
-                          'is_visible': True}}
-}
 #we need extend port resource and add connect_to_ovs action to it
 
-class OVSNetwork(extensions.ExtensionDescriptor):
+class Ovsnetwork(extensions.ExtensionDescriptor):
     """OVS Network extension."""
 
     @classmethod
@@ -209,66 +182,15 @@ class OVSNetworkPluginBase(object):
 
     @abstractmethod
     def get_ovs_networks(self, context, filters=None, fields=None,
-                         sorts=None, limit=None, marker=None,
-                         page_reverse=False):
+                        sorts=None, limit=None, marker=None,
+                        page_reverse=False):
         pass    
 
     @abstractmethod
     def get_ovs_network(self, context, id, fields=None):
         pass    
-
-    @abstractmethod
-    def create_ovs_network(self, context, ovs_network):
-        pass    
-
-    @abstractmethod
-    def delete_ovs_network(self, context, id):
-        pass    
         
     @abstractmethod
     def update_ovs_network(self, context, id, ovsnetwork):
         pass   
-
-    @abstractmethod
-    def get_ovs_links(self, context, filters=None, fields=None,
-                      sorts=None, limit=None, marker=None,
-                      page_reverse=False):
-        pass    
-
-    @abstractmethod
-    def get_ovs_link(self, context, id, fields=None):
-        pass    
-
-    @abstractmethod
-    def create_ovs_link(self, context, ovs_link):
-        pass    
-
-    @abstractmethod
-    def delete_ovs_link(self, context, id):
-        pass    
-        
-    @abstractmethod
-    def update_ovs_link(self, context, id, ovs_link):
-        pass
-
-    @abstractmethod
-    def get_vm_links(self, context, filters=None, fields=None,
-                      sorts=None, limit=None, marker=None,
-                      page_reverse=False):
-        pass    
-
-    @abstractmethod
-    def get_vm_link(self, context, id, fields=None):
-        pass    
-
-    @abstractmethod
-    def create_vm_link(self, context, ovs_link):
-        pass    
-
-    @abstractmethod
-    def delete_vm_link(self, context, id):
-        pass    
-        
-    @abstractmethod
-    def update_vm_link(self, context, id, ovs_link):
-        pass
+       
