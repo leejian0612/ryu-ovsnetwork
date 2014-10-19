@@ -34,6 +34,9 @@ class OVSNetworkNotFound(qexception.NotFound):
     
 class InvalidPortNum(qexception.InvalidInput):
     message = _("Invalid value for port %(port)s")
+
+class OVSNetworkHasLinks(qexception.InUse):
+    message = _("OVS Network %(id)s has links")
     
 def convert_to_validate_port_num(port):
     if port is None:
@@ -189,8 +192,59 @@ class OVSNetworkPluginBase(object):
     @abstractmethod
     def get_ovs_network(self, context, id, fields=None):
         pass    
+
+    @abstractmethod
+    def create_ovs_network(self, context, ovs_network):
+        pass    
         
     @abstractmethod
-    def update_ovs_network(self, context, id, ovsnetwork):
+    def update_ovs_network(self, context, id, ovs_network):
         pass   
-       
+
+    @abstractmethod
+    def delete_ovs_network(self, context, id):
+        pass    
+
+    @abstractmethod
+    def get_vm_links(self, context, filters=None, fields=None,
+                     sorts=None, limit=None, marker=None,
+                     page_reverse=False):
+        pass    
+
+    @abstractmethod
+    def get_vm_link(self, context, id, fields=None):
+        pass    
+
+    @abstractmethod
+    def create_vm_link(self, context, vm_link):
+        pass    
+
+    @abstractmethod
+    def update_vm_link(self, context, id, vm_link):
+        pass   
+
+    @abstractmethod
+    def delete_vm_link(self, context, id):
+        pass    
+
+    @abstractmethod
+    def get_ovs_links(self, context, filters=None, fields=None,
+                      sorts=None, limit=None, marker=None,
+                      page_reverse=False):
+        pass    
+
+    @abstractmethod
+    def get_ovs_link(self, context, id, fields=None):
+        pass    
+
+    @abstractmethod
+    def create_ovs_link(self, context, ovs_link):
+        pass    
+
+    @abstractmethod
+    def update_ovs_link(self, context, id, ovs_link):
+        pass   
+
+    @abstractmethod
+    def delete_ovs_link(self, context, id):
+        pass    
