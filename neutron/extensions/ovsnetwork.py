@@ -31,12 +31,21 @@ from neutron import manager
 
 class OVSNetworkNotFound(qexception.NotFound):
     message = _("OVS Network %(id)s could not be found")
-    
+
 class InvalidPortNum(qexception.InvalidInput):
     message = _("Invalid value for port %(port)s")
 
 class OVSNetworkHasLinks(qexception.InUse):
     message = _("OVS Network %(id)s has links")
+
+class VMLinkNotFound(qexception.NotFound):
+    message = _("VM Link %(id)s could not be found")
+
+class HostNotSetInVMLink(qexception.NotFound):
+    message = _("can not find vm_host in VMLink")
+
+class OVSLinkNotFound(qexception.NotFound):
+    message = _("OVS Link %(id)s could not be found")
     
 def convert_to_validate_port_num(port):
     if port is None:
