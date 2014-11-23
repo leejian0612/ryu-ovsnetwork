@@ -74,7 +74,8 @@ RESOURCE_ATTRIBUTE_MAP = {
                       'is_visible': True},
         'host': {'allow_post': True, 'allow_put': False,
                  'validate': {'type:string': None},
-                 'is_visible': True},
+                 'is_visible': True,
+                 'default': ''},
         'controller_ipv4_address':{'allow_post': True, 
                                    'allow_put': True,
                                    'validate': {'type:ip_address_or_none': None},
@@ -85,7 +86,7 @@ RESOURCE_ATTRIBUTE_MAP = {
                                'convert_to': convert_to_validate_port_num,
                                'is_visible': True,
                                'default':None}
-    }
+    },
     'vm_links' : {
         'id': {'allow_post': False, 'allow_put': False,
                'validate': {'type:uuid': None},
@@ -96,38 +97,43 @@ RESOURCE_ATTRIBUTE_MAP = {
                       'is_visible': True},
         'name': {'allow_post': True, 'allow_put': True,
                  'validate': {'type:string': None},
-                 'is_visible': True},
-        'ovs_network_id': {'allow_post': True, 'allow_put': False,
+                 'is_visible': True,
+                 'default': ''},
+        'ovs_network_id': {'allow_post': True, 'allow_put': True,
                            'validate': {'type:string': None},
                            'is_visible': True},
         'ovs_network_name': {'allow_post': True, 'allow_put': True,
                              'validate': {'type:string': None},
-                             'is_visible': True}
-    }
+                             'is_visible': True,
+                             'default': ''}
+    },
     'ovs_links' : {
         'id': {'allow_post': False, 'allow_put': False,
                'validate': {'type:uuid': None},
                'is_visible': True,
                'primary_key': True},
           
-        'tenant_id': {'allow_post': False, 'allow_put': False,
+        'tenant_id': {'allow_post': True, 'allow_put': False,
                       'validate': {'type:string': None},
                       'is_visible': True},
         'name': {'allow_post': True, 'allow_put': True,
                  'validate': {'type:string': None},
-                 'is_visible': True},
+                 'is_visible': True,
+                 'default': ''},
         'left_ovs_id': {'allow_post': True, 'allow_put': False,
                         'validate': {'type:string': None},
                         'is_visible': True},
         'left_ovs_name': {'allow_post': True, 'allow_put': True,
                           'validate': {'type:string': None},
-                          'is_visible': True},
+                          'is_visible': True,
+                          'default': ''},
         'right_ovs_id': {'allow_post': True, 'allow_put': False,
                          'validate': {'type:string': None},
                          'is_visible': True},
         'right_ovs_name': {'allow_post': True, 'allow_put': True,
                            'validate': {'type:string': None},
-                           'is_visible': True}
+                           'is_visible': True,
+                           'default': ''}
     }
 }
 
@@ -164,9 +170,9 @@ class Ovsnetwork(extensions.ExtensionDescriptor):
         attr.PLURALS.update(dict(my_plurals))
         exts = []
         plugin = manager.NeutronManager.get_plugin()
-        for resource_name in ['ovs_network']:
+        for resource_name in ['ovs_network', 'ovs_link', 'vm_link']:
             collection_name = resource_name.replace('_', '-') + "s"
-            params = RESOURCE_ATTRIBUTE_MAP.get(collection_name, dict())
+            params = RESOURCE_ATTRIBUTE_MAP.get(resource_name + "s", dict())
             #quota.QUOTAS.register_resource_by_name(resource_name)
             controller = base.create_resource(collection_name,
                                               resource_name,
@@ -183,8 +189,9 @@ class Ovsnetwork(extensions.ExtensionDescriptor):
 
     def get_extended_resources(self, version):
         if version == "2.0":
-            return dict(EXTENDED_ATTRIBUTES_2_0.items() +
-                        RESOURCE_ATTRIBUTE_MAP.items())
+            #return dict(EXTENDED_ATTRIBUTES_2_0.items() +
+            #            RESOURCE_ATTRIBUTE_MAP.items())
+            return dict(RESOURCE_ATTRIBUTE_MAP.items())
         else:
             return {}  
 

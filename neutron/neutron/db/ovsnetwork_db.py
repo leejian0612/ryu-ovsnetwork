@@ -27,12 +27,16 @@ from neutron.db import portbindings_db
 from neutron.db import model_base
 from neutron.db import models_v2
 
-import ovsnetwork as ext_ovsnetwork
+from neutron.extensions import ovsnetwork as ext_ovsnetwork
 from neutron.openstack.common import uuidutils
+from neutron.openstack.common import log as logging
+
+
+LOG = logging.getLogger(__name__)
 
 class OVSNetwork(model_base.BASEV2, models_v2.HasTenant):
-    id = sa.Column(sa.String(36),
-                   sa.ForeignKey("networks.id", ondelete='CASCADE'),
+    id = sa.Column(sa.String(36), 
+                   sa.ForeignKey("networks.id",ondelete='CASCADE'),
                    primary_key=True)
     name = sa.Column(sa.String(255))
     host = sa.Column(sa.String(255), nullable=True)
@@ -55,17 +59,16 @@ class VMLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
 class OVSLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
     name = sa.Column(sa.String(255))
     left_port_id = sa.Column(sa.String(36),
-                   sa.ForeignKey("ports.id", ondelete='CASCADE'))
+                             sa.ForeignKey("ports.id", ondelete='CASCADE'))
     right_port_id = sa.Column(sa.String(36),
-                    sa.ForeignKey("ports.id", ondelete='CASCADE'))
-    left_ovs_id = sa.Column(sa.String(36), nullable=False,
-                            sa.ForeignKey("ovsnetworks.id", ondelete='CASCADE')
-    right_ovs_id = sa.Column(sa.String(36), nullable=False,
-                             sa.ForeignKey("ovsnetworks.id", ondelete='CASCADE')
+                              sa.ForeignKey("ports.id", ondelete='CASCADE'))
+    left_ovs_id = sa.Column(sa.String(36),
+                            sa.ForeignKey('ovsnetworks.id', ondelete='CASCADE'))
+    right_ovs_id = sa.Column(sa.String(36),
+                            sa.ForeignKey('ovsnetworks.id', ondelete='CASCADE'))
     __table_args__ = (
         UniqueConstraint("name", "tenant_id"),
     )
-
 
 class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
     """Mixin class to add ovs network extension to db_plugin_base_v2."""
@@ -74,6 +77,7 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         res = {'id': ovs_network['id'],
                'tenant_id': ovs_network['tenant_id'],
                'name': ovs_network['name'],
+               'host': ovs_network['host'],
                'controller_ipv4_address': ovs_network['controller_ipv4_address'],
                'controller_port_num': ovs_network.get('controller_port_num', None),
                #'tunnel_key':ovsnetwork.get('tunnel_key',None)
@@ -81,7 +85,7 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         return self._fields(res, fields)        
 
 
-    def _get_ovsnetwork(self, context, id):
+    def _get_ovs_network(self, context, id):
         try:
             query = self._model_query(context, OVSNetwork)
             ovs_network = query.filter(OVSNetwork.id == id).one()
@@ -100,23 +104,21 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
     def _process_ovs_network_delete(self, context, id):
 
        try:
-            query = self._model_query(context, models_v2.Network)
-            network = query.filter(Network.id == id).one()
-
+           query = context.session.query(models_v2.Network)
+           network = query.filter(models_v2.Network.id == id).one()
        except exc.NoResultFound:
            return
-        
        with context.session.begin(subtransactions=True):
            context.session.delete(network) 
     
-    def get_ovsnetwork(self, context, id, fields=None):
+    def get_ovs_network(self, context, id, fields=None):
         with context.session.begin(subtransactions=True):
-            ovs_network = self._get_ovsnetwork(context, id)
+            ovs_network = self._get_ovs_network(context, id)
             if ovs_network != None:
                 ret = self._make_ovs_network_dict(ovs_network, fields)            
                 return ret 
 
-    def get_ovsnetworks(self, context, filters=None, fields=None,
+    def get_ovs_networks(self, context, filters=None, fields=None,
                         sorts=None, limit=None, marker=None,
                         page_reverse=False):
         marker_obj = self._get_marker_obj(context, 'ovs_network',
@@ -137,37 +139,39 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         controller_ipv4_address = ovs_network.get('controller_ipv4_address', None)
         controller_port_num = ovs_network.get('controller_ipv4_port', None)
         with context.session.begin(subtransactions=True):
-            ovs_network_db = OVSNetwork(id = uuidutils.generate_uuid(),
+            id = uuidutils.generate_uuid()
+            ovs_network.update({'id': id})
+            #Add a new network record before creating an ovs_network.
+            self._process_ovs_network_create(context, ovs_network)
+            ovs_network_db = OVSNetwork(id = id,
                                         tenant_id = tenant_id,
                                         name = name,
                                         host = host,
                                         controller_ipv4_address = controller_ipv4_address,
                                         controller_port_num = controller_port_num)
             context.session.add(ovs_network_db)
-            #Add a new network record when creating an ovs_network.
-            self._process_ovs_network_create(context, ovs_network)
         return self._make_ovs_network_dict(ovs_network_db)
     
-    def update_ovsnetwork(self, context, id, ovs_network):
+    def update_ovs_network(self, context, id, ovs_network):
         with context.session.begin(subtransactions=True):
-            ovs_network_db = self._get_ovsnetwork(context, id)
+            ovs_network_db = self._get_ovs_network(context, id)
             if not ovs_network_db:
                 return None
-            ovs_network_db.update(ovs_network['ovsnetwork'])
-        return self._make_ovs_network_dict(ovsnetwork_db) 
+            ovs_network_db.update(ovs_network['ovs_network'])
+        return self._make_ovs_network_dict(ovs_network_db) 
 
     def delete_ovs_network(self, context, id):
         filters = {'ovs_network_id': [id]}
         # this is not implemented
-        vmlinks = self._get_vm_links(context, filters)
+        vmlinks = self.get_vm_links(context, filters)
         ovslinks = self.get_ovs_links(context, filters)
         if vmlinks or ovslinks:
             raise ext_ovsnetwork.OVSNetworkHasLinks(id=id)
         ovs_network = self._get_ovs_network(context, id)
 
         with context.session.begin(subtransactions=True):
-            context.session.delete(ovs_network)
             self._process_ovs_network_delete(context, id)
+            context.session.delete(ovs_network)
 
     def _make_vm_link_dict(self, vm_link, fields=None):
         res = {'id': vm_link['id'],
@@ -189,29 +193,62 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         except exc.NoResultFound:
             return None
         return vm_link
-
-    def _process_vm_link_create(self, context, ovs_network_id):
-        p = {'port': {'network_id': ovs_network_id}}
-
-        p['port']['device_owner'] = 'vm_link:ovs_port'
-        ovs_port = db_base_plugin_v2.create_port(context, p)
-
-        p['port']['device_owner'] = 'vm_link:vm_port'
-        vm_port = db_base_plugin_v2.create_port(context, p)
-
-        return vm_port['id'], ovs_port['id']
     
-    def _process_vm_link_update(self, context, id, ovs_network_id):
-        #here id is old ovs_port_id, first delete old ovs_port, and
-        #then create a new ovs_port on new ovs_network!
-        db_base_plugin_v2.delete_port(context, id=id)
-        p = {'port': {'network_id': ovs_network_id}}
-        p['port']['device_owner'] = 'vm_link:ovs_port'
-        ovs_port = db_base_plugin_v2.create_port(context, p)
+    def _process_vm_link_create(self, context, tenant_id, ovs_network_id):
+        with context.session.begin(subtransactions=True):
+            vm_port_id = uuidutils.generate_uuid()
+            ovs_port_id = uuidutils.generate_uuid()
+            for port_id in [vm_port_id, ovs_port_id]:
+                if port_id == vm_port_id:
+                   device_owner = 'vm_link:vm_port'
+                else:
+                   device_owner = 'vm_link:ovs_port'
+
+                port = models_v2.Port(tenant_id=tenant_id,
+                    name='',
+                    id=port_id,
+                    network_id=ovs_network_id,
+                    mac_address=db_base_plugin_v2.NeutronDbPluginV2._generate_mac(context, ovs_network_id),
+                    admin_state_up=True,
+                    status='ACTIVE',
+                    device_id='',
+                    device_owner=device_owner)
+                context.session.add(port)
+            return vm_port_id, ovs_port_id
+
+    def _process_vm_link_update(self, context, old_port_id, new_ovs_id):
+       with context.session.begin(subtransactions=True):
+           try:
+               query = context.session.query(models_v2.Port)
+               port = query.filter(models_v2.Port.id == old_port_id).one()
+           except exc.NoResultFound:
+               LOG.debug(_("can not find port %s"), id)
+               return
+           context.session.delete(port) 
+           port_id = uuidutils.generate_uuid()
+           device_owner = 'vm_link:ovs_port'
+           port = models_v2.Port(tenant_id=tenant_id,
+                name='',
+                id=port_id,
+                network_id=new_ovs_id,
+                mac_address=db_base_plugin_v2.NeutronDbPluginV2._generate_mac(context, new_ovs_id),
+                admin_state_up=True,
+                status='ACTIVE',
+                device_id='',
+                device_owner=device_owner)
+           context.session.add(port)
+           return port_id
     
-    def _process_vm_link_delete(self, context, ovs_port_id, vm_port_id):
-        db_base_plugin_v2.delete_port(context, id=ovs_port_id)
-        db_base_plugin_v2.delete_port(context, id=vm_port_id)
+    def _process_vm_link_delete(self, context, vm_port_id, ovs_port_id):
+       with context.session.begin(subtransactions=True):
+           for id in [vm_port_id, ovs_port_id]:
+               try:
+                   query = context.session.query(models_v2.Port)
+                   port = query.filter(models_v2.Port.id == id).one()
+               except exc.NoResultFound:
+                   LOG.debug(_("can not find port %s"), id)
+                   return
+               context.session.delete(port) 
     
     def _get_ovs_network_id_by_name(self, context, name):
         try:
@@ -252,22 +289,22 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
             raise ext_ovsnetwork.HostNotSetInVMLink()
         ovs_network_name = vm_link.get('ovs_network_name')
         ovs_network_id = vm_link.get('ovs_network_id')
-        if not attr.is_attr_set(ovs_network_id) 
+        if not attr.is_attr_set(ovs_network_id):
             if attr.is_attr_set(ovs_network_name):
                 ovs_network_id = self._get_ovs_network_id_by_name(context, ovs_network_name)       
             else:
                 raise ext_ovsnetwork.OVSNetworkNotFound()  
-        vm_port_id, ovs_port_id = self._process_vm_link_create(context, ovs_network_id)
         with context.session.begin(subtransactions=True):
+            vm_port_id, ovs_port_id = self._process_vm_link_create(context, tenant_id, ovs_network_id)
             vm_link_db = VMLink(id = uuidutils.generate_uuid(),
                                 tenant_id = tenant_id,
                                 name = name,
                                 vm_port_id = vm_port_id,
                                 vm_host = vm_host,
-                                ovs_port_id = ovs_port_id;
+                                ovs_port_id = ovs_port_id,
                                 ovs_network_id = ovs_network_id)
             context.session.add(vm_link_db)
-        return self._make_vm_link_dict(ovs_network_db)
+        return self._make_vm_link_dict(vm_link_db)
     
     def update_vm_link(self, context, id, vm_link):
         vm_link = vm_link['vm_link']
@@ -276,23 +313,21 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
             if not vm_link_db:
                 return None
             old_ovs_id = vm_link_db['ovs_network_id']
-            new_ovs_id = vm_link['ovs_network_id']
-            if not new_ovs_id:
+            new_ovs_id = vm_link.get('ovs_network_id')
+            ovs_network_name = vm_link.get('ovs_network_name')
+            if not new_ovs_id and ovs_network_name:
                 new_ovs_id = self._get_ovs_network_id_by_name(context, vm_link['ovs_network_name'])
-            if old_ovs_id != new_ovs_id:
-                vm_link['ovs_port_id'] = self._process_vm_link_update(context, 
-                                             vm_link_db['ovs_port_id'], vm_link['ovs_network_id'])
-            else:
-                vm_link['ovs_port_id'] = vm_link_db['ovs_port_id']
-            vm_link['vm_link']['vm_port_id'] = vm_link_db['vm_port_id']
-            vm_link_db.update(vm_link['vm_link'])
+                if old_ovs_id != new_ovs_id:
+                    vm_link['ovs_port_id'] = self._process_vm_link_update(context, 
+                                                 vm_link_db['ovs_port_id'], vm_link['ovs_network_id'])
+            vm_link_db.update(vm_link)
         return self._make_vm_link_dict(vm_link_db) 
 
     def delete_vm_link(self, context, id):
         vm_link = self._get_vm_link(context, id)
 
         with context.session.begin(subtransactions=True):
-            self._process_vm_link_delete(context, id)
+            self._process_vm_link_delete(context, vm_link['vm_port_id'], vm_link['ovs_port_id'])
             context.session.delete(vm_link)
 
     #ovs_link operation
@@ -319,40 +354,59 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
     def _get_ovs_link_endpoint_ids(self, context, ovs_link):
         left_ovs_name = ovs_link.get('left_ovs_name')
         left_ovs_id = ovs_link.get('left_ovs_id')
-        if not attr.is_attr_set(left_ovs_id) 
+        if not attr.is_attr_set(left_ovs_id): 
             if attr.is_attr_set(left_ovs_name):
                 left_ovs_id = self._get_ovs_network_id_by_name(context, left_ovs_name)       
             else:
                 raise ext_ovsnetwork.OVSNetworkNotFound()  
         right_ovs_name = ovs_link.get('right_ovs_name')
         right_ovs_id = ovs_link.get('right_ovs_id')
-        if not attr.is_attr_set(right_ovs_id) 
+        if not attr.is_attr_set(right_ovs_id): 
             if attr.is_attr_set(right_ovs_name):
                 right_ovs_id = self._get_ovs_network_id_by_name(context, right_ovs_name)       
             else:
                 raise ext_ovsnetwork.OVSNetworkNotFound()  
         return left_ovs_id, right_ovs_id
 
-    def _process_ovs_link_create(self, context, left_ovs_id, right_ovs_id):
-        p = {'port': {'network_id': left_ovs_id}}
-        p['port']['device_owner'] = 'ovs_link:left_ovs_port'
-        left_ovs_port = db_base_plugin_v2.create_port(context, p)
-
-        p = {'port': {'network_id': right_ovs_id}}
-        p['port']['device_owner'] = 'ovs_link:right_ovs_port'
-        right_ovs_port = db_base_plugin_v2.create_port(context, p)
-
-        return left_ovs_port['id'], right_ovs_port['id']
+    def _process_ovs_link_create(self, context, left_ovs_id, right_ovs_id, tenant_id):
+        port_ids = []
+        with context.session.begin(subtransactions=True):
+            for ovs_network_id in [left_ovs_id, right_ovs_id]:
+                port_id=uuidutils.generate_uuid() 
+                port = models_v2.Port(tenant_id=tenant_id,
+                                  name='',
+                                  id=port_id,
+                                  network_id=ovs_network_id,
+                                  mac_address=db_base_plugin_v2.NeutronDbPluginV2._generate_mac(context, ovs_network_id),
+                                  admin_state_up=True,
+                                  status='ACTIVE',
+                                  device_id='',
+                                  device_owner='ovs_link:ovs_port')
+                LOG.debug(_("lijian port_id is %s\n %s\n %s\n"), port_id, type(port_id), dir(port_id))
+                context.session.add(port)
+                #p = {'port': {'network_id': ovs_network_id}}
+                #p['port']['device_owner'] = 'ovs_link:ovs_port'
+                #p['port']['mac_address'] = object()
+                #port = db_base_plugin_v2.NeutronDbPluginV2.create_port(self, context, p)
+                port_ids.append(port['id'])
+        return port_ids[0],port_ids[1]
     
     def _process_ovs_link_delete(self, context, left_port_id, right_port_id):
-        db_base_plugin_v2.delete_port(context, id=left_port_id)
-        db_base_plugin_v2.delete_port(context, id=right_port_id)
+       with context.session.begin(subtransactions=True):
+           for id in [left_port_id, right_port_id]:
+               try:
+                   query = context.session.query(models_v2.Port)
+                   port = query.filter(models_v2.Port.id == id).one()
+               except exc.NoResultFound:
+                   LOG.debug(_("can not find port %s"), id)
+                   return
+               context.session.delete(port) 
     
     def get_ovs_link(self, context, id, fields=None):
         with context.session.begin(subtransactions=True):
             ovs_link = self._get_ovs_link(context, id)
-            if vm_link != None:
-                ret = self._make_ovs_link_dict(vm_link, fields)            
+            if ovs_link != None:
+                ret = self._make_ovs_link_dict(ovs_link, fields)            
                 return ret 
             else:
                 raise ext_ovsnetwork.OVSLinkNotFound(id=id)                    
@@ -376,8 +430,8 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         tenant_id = self._get_tenant_id_for_create(context, ovs_link)
         name = ovs_link.get('name', None)
         left_ovs_id, right_ovs_id = self._get_ovs_link_endpoint_ids(context, ovs_link)
-        left_port_id, right_port_id = self._process_ovs_link_create(context, left_ovs_id, right_ovs_id)
         with context.session.begin(subtransactions=True):
+            left_port_id, right_port_id = self._process_ovs_link_create(context, left_ovs_id, right_ovs_id, tenant_id)
             ovs_link_db = OVSLink(id = id,
                                   tenant_id = tenant_id,
                                   name = name,
@@ -386,16 +440,18 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
                                   right_port_id = right_port_id,
                                   right_ovs_id = right_ovs_id)
             context.session.add(ovs_link_db)
-        return self._make_ovs_link_dict(ovs_network_db)
+        return self._make_ovs_link_dict(ovs_link_db)
 
     def update_ovs_link(self, context, id, ovs_link):
+        # should we support ovs link update? This should be considered in future! lijian
         self.delete_ovs_link(context, id)
         ovs_link['ovs_link']['id'] = id 
         self.create_ovs_link(context, ovs_link)
     
     def delete_ovs_link(self, context, id):
         ovs_link = self._get_ovs_link(context, id)
+        LOG.debug(_("lijian ovs_link is %s\n"), ovs_link)
 
         with context.session.begin(subtransactions=True):
-            self._process_ovs_link_delete(context, id)
+            self._process_ovs_link_delete(context, ovs_link['left_port_id'], ovs_link['right_port_id'])
             context.session.delete(ovs_link)
