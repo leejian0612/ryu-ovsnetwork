@@ -137,7 +137,7 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         name = ovs_network.get('name', None)
         host = ovs_network.get('host', None)
         controller_ipv4_address = ovs_network.get('controller_ipv4_address', None)
-        controller_port_num = ovs_network.get('controller_ipv4_port', None)
+        controller_port_num = ovs_network.get('controller_port_num', None)
         with context.session.begin(subtransactions=True):
             id = uuidutils.generate_uuid()
             ovs_network.update({'id': id})
@@ -168,10 +168,12 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         if vmlinks or ovslinks:
             raise ext_ovsnetwork.OVSNetworkHasLinks(id=id)
         ovs_network = self._get_ovs_network(context, id)
+        host = ovs_network['host']
 
         with context.session.begin(subtransactions=True):
             self._process_ovs_network_delete(context, id)
             context.session.delete(ovs_network)
+        return host
 
     def _make_vm_link_dict(self, vm_link, fields=None):
         res = {'id': vm_link['id'],

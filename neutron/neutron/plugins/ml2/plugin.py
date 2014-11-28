@@ -54,7 +54,7 @@ from neutron.plugins.ml2 import driver_context
 from neutron.plugins.ml2 import managers
 from neutron.plugins.ml2 import models
 from neutron.plugins.ml2 import rpc
-from neutron.db import ovsnetwork_db
+from neutron.db import ovsnetwork_rpc_base
 
 LOG = log.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 agentschedulers_db.DhcpAgentSchedulerDbMixin,
                 addr_pair_db.AllowedAddressPairsMixin,
                 extradhcpopt_db.ExtraDhcpOptMixin,
-                ovsnetwork_db.OVSNetworkDbMixin):
+                ovsnetwork_rpc_base.OVSNetworkServerRpcMixin):
 
     """Implement the Neutron L2 abstractions using modules.
 

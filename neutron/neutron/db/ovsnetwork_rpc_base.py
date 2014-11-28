@@ -19,9 +19,7 @@ import netaddr
 
 from neutron.common import constants as q_const
 from neutron.common import utils
-from neutron.db import models_v2
-import ovsnetwork_db
-from neutron.extensions import securitygroup as ext_sg
+from neutron.db import ovsnetwork_db
 from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -29,13 +27,27 @@ LOG = logging.getLogger(__name__)
 
 class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
      
-    def update_ovsnetwork(self, context, id, ovsnetwork):
-        ovs_network = super(OVSNetworkServerRpcMixin,self).update_ovsnetwork(context,id,ovsnetwork)
+    def create_ovs_network(self, context, ovs_network):
+        ovs_network = super(OVSNetworkServerRpcMixin, self).create_ovs_network(context, ovs_network)
         if not ovs_network:
             return
-        self.notifier.ovsnetwork_update(context, id, ovs_network)
+        self.notifier.ovs_network_created(context, ovs_network)
         return ovs_network
+
+    def update_ovs_network(self, context, id, ovs_network):
+        ovs_network = super(OVSNetworkServerRpcMixin, self).update_ovs_network(context, id, ovs_network)
+        if not ovs_network:
+            return
+        self.notifier.ovs_network_updated(context, id, ovs_network)
+        return ovs_network
+
+    def delete_ovs_network(self, context, id):
+        host = super(OVSNetworkServerRpcMixin, self).delete_ovs_network(context, id)
+        if host:
+            self.notifier.ovs_network_deleted(context, id, host)
+        return id
     
 
 class OVSNetworkServerRpcCallbackMixin(object):
+    # we should add some function to sync states of ovs_network, vm_link and ovs_link in future
     pass    
