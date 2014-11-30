@@ -99,6 +99,10 @@ RESOURCE_ATTRIBUTE_MAP = {
                  'validate': {'type:string': None},
                  'is_visible': True,
                  'default': ''},
+        'vm_host': {'allow_post': True, 'allow_put': False,
+                    'validate': {'type:string': None},
+                    'is_visible': True,
+                    'default': ''},
         'ovs_network_id': {'allow_post': True, 'allow_put': True,
                            'validate': {'type:string': None},
                            'is_visible': True},
@@ -257,9 +261,9 @@ class OVSNetworkPluginBase(object):
     def create_ovs_link(self, context, ovs_link):
         pass    
 
-    @abstractmethod
-    def update_ovs_link(self, context, id, ovs_link):
-        pass   
+    #@abstractmethod
+    #def update_ovs_link(self, context, id, ovs_link):
+    #    pass   
 
     @abstractmethod
     def delete_ovs_link(self, context, id):

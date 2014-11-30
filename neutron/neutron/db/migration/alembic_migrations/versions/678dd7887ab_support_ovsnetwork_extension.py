@@ -81,6 +81,20 @@ def upgrade(active_plugins=None, options=None):
     mysql_engine=u'InnoDB'
     )
 
+    op.create_table('tunnelkeylasts',
+    sa.Column('last_key', sa.Integer(), nullable=True),
+    sa.PrimaryKeyConstraint('last_key'),
+    mysql_default_charset=u'utf8',
+    mysql_engine=u'InnoDB'
+    )
+
+    op.create_table('tunnelkeys',
+    sa.Column('tunnel_key', sa.Integer(), nullable=True, autoincrement=False),
+    sa.Column('port_id', sa.String(length=36), nullable=False),
+    sa.PrimaryKeyConstraint('tunnel_key'),
+    mysql_default_charset=u'utf8',
+    mysql_engine=u'InnoDB'
+    )
 
 def downgrade(active_plugins=None, options=None):
     if not migration.should_run(active_plugins, migration_for_plugins):
@@ -89,3 +103,5 @@ def downgrade(active_plugins=None, options=None):
     op.drop_table('ovsnetworks')
     op.drop_table('vmlinks')
     op.drop_table('ovslinks')
+    op.drop_table('tunnelkeylasts')
+    op.drop_table('tunnelkeys')

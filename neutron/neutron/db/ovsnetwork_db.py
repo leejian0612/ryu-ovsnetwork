@@ -15,11 +15,15 @@
 #    under the License.
 #
 # @author: Jian LI, BUPT
+# Tunnelkey is copied from ryu plugin in icehouse release
 
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.orm import exc
 from sqlalchemy import UniqueConstraint
+
+from sqlalchemy import func
+from sqlalchemy import exc as sa_exc
 
 from neutron.api.v2 import attributes as attr
 from neutron.db import db_base_plugin_v2
@@ -30,9 +34,36 @@ from neutron.db import models_v2
 from neutron.extensions import ovsnetwork as ext_ovsnetwork
 from neutron.openstack.common import uuidutils
 from neutron.openstack.common import log as logging
+from neutron.common import exceptions as n_exc
+from oslo.config import cfg
+
+
 
 
 LOG = logging.getLogger(__name__)
+
+
+class TunnelKeyLast(model_base.BASEV2):
+    """Last allocated Tunnel key.
+
+    The next key allocation will be started from this value + 1
+    """
+    last_key = sa.Column(sa.Integer, primary_key=True)
+
+    def __repr__(self):
+        return "<TunnelKeyLast(%x)>" % self.last_key
+
+
+class TunnelKey(model_base.BASEV2):
+    """Port ID <-> tunnel key mapping."""
+    port_id = sa.Column(sa.String(36), sa.ForeignKey("ports.id"),
+                        nullable=False)
+    tunnel_key = sa.Column(sa.Integer, primary_key=True,
+                           nullable=False, autoincrement=False)
+
+    def __repr__(self):
+        return "<TunnelKey(%s,%x)>" % (self.port_id, self.tunnel_key)
+
 
 class OVSNetwork(model_base.BASEV2, models_v2.HasTenant):
     id = sa.Column(sa.String(36), 
@@ -46,6 +77,7 @@ class OVSNetwork(model_base.BASEV2, models_v2.HasTenant):
         UniqueConstraint("name", "tenant_id"),
     )
 
+
 class VMLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
     name = sa.Column(sa.String(255))
     vm_port_id = sa.Column(sa.String(36), sa.ForeignKey("ports.id"))
@@ -55,6 +87,7 @@ class VMLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
     __table_args__ = (
         UniqueConstraint("name", "tenant_id"),
     )
+
 
 class OVSLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
     name = sa.Column(sa.String(255))
@@ -70,8 +103,154 @@ class OVSLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
         UniqueConstraint("name", "tenant_id"),
     )
 
+
+class TunnelKeyDbMixin(object):
+    # VLAN: 12 bits
+    # GRE, VXLAN: 24bits
+    # TODO(yamahata): STT: 64bits
+    _KEY_MIN_HARD = 1
+    _KEY_MAX_HARD = 0xffffffff
+
+    def __init__(self, key_min=_KEY_MIN_HARD, key_max=_KEY_MAX_HARD):
+        self.key_min = key_min
+        self.key_max = key_max
+
+        if (key_min < self._KEY_MIN_HARD or key_max > self._KEY_MAX_HARD or
+                key_min > key_max):
+            raise ValueError(_('Invalid tunnel key options '
+                               'tunnel_key_min: %(key_min)d '
+                               'tunnel_key_max: %(key_max)d. '
+                               'Using default value') % {'key_min': key_min,
+                                                         'key_max': key_max})
+
+    def _last_key(self, session):
+        try:
+            return session.query(TunnelKeyLast).one()
+        except exc.MultipleResultsFound:
+            max_key = session.query(
+                func.max(TunnelKeyLast.last_key))
+            if max_key > self.key_max:
+                max_key = self.key_min
+
+            session.query(TunnelKeyLast).delete()
+            last_key = TunnelKeyLast(last_key=max_key)
+        except exc.NoResultFound:
+            last_key = TunnelKeyLast(last_key=self.key_min)
+
+        session.add(last_key)
+        session.flush()
+        return session.query(TunnelKeyLast).one()
+
+    def _find_key(self, session, last_key):
+        """Try to find unused tunnel key.
+        Trying to find unused tunnel key in TunnelKey table starting
+        from last_key + 1.
+        When all keys are used, raise sqlalchemy.orm.exc.NoResultFound
+        """
+        # key 0 is used for special meanings. So don't allocate 0.
+
+        # sqlite doesn't support
+        # '(select order by limit) union all (select order by limit) '
+        # 'order by limit'
+        # So do it manually
+        # new_key = session.query("new_key").from_statement(
+        #     # If last_key + 1 isn't used, it's the result
+        #     'SELECT new_key '
+        #     'FROM (SELECT :last_key + 1 AS new_key) q1 '
+        #     'WHERE NOT EXISTS '
+        #     '(SELECT 1 FROM tunnelkeys WHERE tunnel_key = :last_key + 1) '
+        #
+        #     'UNION ALL '
+        #
+        #     # if last_key + 1 used,
+        #     # find the least unused key from last_key + 1
+        #     '(SELECT t.tunnel_key + 1 AS new_key '
+        #     'FROM tunnelkeys t '
+        #     'WHERE NOT EXISTS '
+        #     '(SELECT 1 FROM tunnelkeys ti '
+        #     ' WHERE ti.tunnel_key = t.tunnel_key + 1) '
+        #     'AND t.tunnel_key >= :last_key '
+        #     'ORDER BY new_key LIMIT 1) '
+        #
+        #     'ORDER BY new_key LIMIT 1'
+        # ).params(last_key=last_key).one()
+        try:
+            new_key = session.query("new_key").from_statement(
+                # If last_key + 1 isn't used, it's the result
+                'SELECT new_key '
+                'FROM (SELECT :last_key + 1 AS new_key) q1 '
+                'WHERE NOT EXISTS '
+                '(SELECT 1 FROM tunnelkeys WHERE tunnel_key = :last_key + 1) '
+            ).params(last_key=last_key).one()
+        except exc.NoResultFound:
+            new_key = session.query("new_key").from_statement(
+                # if last_key + 1 used,
+                # find the least unused key from last_key + 1
+                '(SELECT t.tunnel_key + 1 AS new_key '
+                'FROM tunnelkeys t '
+                'WHERE NOT EXISTS '
+                '(SELECT 1 FROM tunnelkeys ti '
+                ' WHERE ti.tunnel_key = t.tunnel_key + 1) '
+                'AND t.tunnel_key >= :last_key '
+                'ORDER BY new_key LIMIT 1) '
+            ).params(last_key=last_key).one()
+
+        new_key = new_key[0]  # the result is tuple.
+        LOG.debug(_("last_key %(last_key)s new_key %(new_key)s"),
+                  {'last_key': last_key, 'new_key': new_key})
+        if new_key > self.key_max:
+            LOG.debug(_("No key found"))
+            raise exc.NoResultFound()
+        return new_key
+
+    def _allocate(self, session, port_id):
+        last_key = self._last_key(session)
+        try:
+            new_key = self._find_key(session, last_key.last_key)
+        except exc.NoResultFound:
+            new_key = self._find_key(session, self.key_min)
+
+        tunnel_key = TunnelKey(port_id=port_id,
+                               tunnel_key=new_key)
+        last_key.last_key = new_key
+        session.add(tunnel_key)
+        return new_key
+
+    _TRANSACTION_RETRY_MAX = 16
+
+    def allocate(self, session, port_id):
+        count = 0
+        while True:
+            session.begin(subtransactions=True)
+            try:
+                new_key = self._allocate(session, port_id)
+                session.commit()
+                break
+            except sa_exc.SQLAlchemyError:
+                session.rollback()
+
+            count += 1
+            if count > self._TRANSACTION_RETRY_MAX:
+                # if this happens too often, increase _TRANSACTION_RETRY_MAX
+                LOG.warn(_("Transaction retry exhausted (%d). "
+                           "Abandoned tunnel key allocation."), count)
+                raise n_exc.ResourceExhausted()
+
+        return new_key
+
+    def delete(self, session, port_id):
+        session.query(TunnelKey).filter_by(
+            port_id=port_id).delete()
+        session.flush()
+
+    def get(self, session, port_id):
+        return session.query(TunnelKey).filter_by(
+            port_id=port_id).one().tunnel_key
+
+
 class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
     """Mixin class to add ovs network extension to db_plugin_base_v2."""
+
 
     def _make_ovs_network_dict(self, ovs_network, fields=None):
         res = {'id': ovs_network['id'],
@@ -260,6 +439,14 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
             raise ext_ovsnetwork.OVSNetworkNotFound(id=name)
         return ovs_network['id']
 
+    def _get_ovs_network_host_by_id(self, context, id):
+        try:
+            query = self._model_query(context, OVSNetwork)
+            ovs_network = query.filter(OVSNetwork.id == id).one()
+        except exc.NoResultFound:
+            raise ext_ovsnetwork.OVSNetworkNotFound(id=id)
+        return ovs_network['host']
+
     def get_vm_link(self, context, id, fields=None):
         with context.session.begin(subtransactions=True):
             vm_link = self._get_vm_link(context, id)
@@ -331,6 +518,7 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
         with context.session.begin(subtransactions=True):
             self._process_vm_link_delete(context, vm_link['vm_port_id'], vm_link['ovs_port_id'])
             context.session.delete(vm_link)
+        return self._make_vm_link_dict(vm_link)
 
     #ovs_link operation
     def _make_ovs_link_dict(self, ovs_link, fields=None):
@@ -444,16 +632,16 @@ class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
             context.session.add(ovs_link_db)
         return self._make_ovs_link_dict(ovs_link_db)
 
-    def update_ovs_link(self, context, id, ovs_link):
-        # should we support ovs link update? This should be considered in future! lijian
-        self.delete_ovs_link(context, id)
-        ovs_link['ovs_link']['id'] = id 
-        self.create_ovs_link(context, ovs_link)
+    #def update_ovs_link(self, context, id, ovs_link):
+    #    # should we support ovs link update? This should be considered in future! lijian
+    #    self.delete_ovs_link(context, id)
+    #    ovs_link['ovs_link']['id'] = id 
+    #    self.create_ovs_link(context, ovs_link)
     
     def delete_ovs_link(self, context, id):
         ovs_link = self._get_ovs_link(context, id)
-        LOG.debug(_("lijian ovs_link is %s\n"), ovs_link)
 
         with context.session.begin(subtransactions=True):
             self._process_ovs_link_delete(context, ovs_link['left_port_id'], ovs_link['right_port_id'])
             context.session.delete(ovs_link)
+        return self._make_ovs_link_dict(ovs_link)

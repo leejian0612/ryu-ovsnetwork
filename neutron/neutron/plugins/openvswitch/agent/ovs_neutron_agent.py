@@ -287,7 +287,13 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                      [topics.SECURITY_GROUP, topics.UPDATE],
                      ['ovs_network', topics.CREATE, cfg.CONF.host],
                      ['ovs_network', topics.UPDATE, cfg.CONF.host],
-                     ['ovs_network', topics.DELETE, cfg.CONF.host]]
+                     ['ovs_network', topics.DELETE, cfg.CONF.host],
+                     ['ovs_link', topics.CREATE, cfg.CONF.host],
+                     ['ovs_link', topics.DELETE, cfg.CONF.host],
+                     ['vm_link', topics.CREATE, cfg.CONF.host],
+                     ['vm_link', topics.UPDATE, cfg.CONF.host],
+                     ['vm_link', topics.DELETE, cfg.CONF.host]]
+                     
         if self.l2_pop:
             consumers.append([topics.L2POPULATION,
                               topics.UPDATE, cfg.CONF.host])
