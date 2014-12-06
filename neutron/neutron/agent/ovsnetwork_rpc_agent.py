@@ -31,7 +31,7 @@ LOG = logging.getLogger(__name__)
 ovs_network_opts = [
     cfg.StrOpt(
         'ovs_network_driver',
-        default=None,
+        default='neutron.agent.linux.ovsnetwork.OVSNetworkDriver',
         help=_('Driver for ovs network implementation on L2 agent')),
 ]
 cfg.CONF.register_opts(ovs_network_opts, 'OVSNETWORK')
@@ -100,7 +100,7 @@ class OVSNetworkAgentRpcApiMixin(object):
             version=OVS_NETWORK_RPC_VERSION,
             topic=self._get_ovs_network_create_topic(ovs_network['host']))
         
-    def ovs_network_updated(self, context, id, ovs_network):
+    def ovs_network_updated(self, context, ovs_network):
         if not id or not ovs_network:
             return
         self.cast(context,
@@ -127,7 +127,6 @@ class OVSNetworkAgentRpcApiMixin(object):
     def ovs_link_right_endpoint_created(self, context, ovs_link, host):
         if not ovs_link:
             return
-        LOG.debug(_("lijian right ovs link endpoint created: %s"), ovs_link)
         self.cast(context,
             self.make_msg('ovs_link_right_endpoint_created', ovs_link=ovs_link),
             version=OVS_NETWORK_RPC_VERSION,
@@ -205,13 +204,14 @@ class OVSNetworkAgentRpcCallbackMixin(object):
             _("ovs network %s updated on remote: %s"), ovs_network, cfg.CONF.host)
         if not self.ovs_network_agent:
             return self._ovs_network_agent_not_set()
-        self.ovs_network_agent.ovs_network_updated(context, id, ovs_network)
+        self.ovs_network_agent.ovs_network_updated(context, ovs_network)
 
-    def ovs_network_deleted(self, context, id):
+    def ovs_network_deleted(self, context, **kwargs):
         """Callback for ovs network update.
 
         :param id: ovs network's id
         """
+        id = kwargs.get('id', None)
         LOG.debug(
             _("ovs network %s deleted on remote: %s"), id, cfg.CONF.host)
         if not self.ovs_network_agent:
@@ -316,50 +316,50 @@ class OVSNetworkAgentRpcMixin(object):
 
     def ovs_network_created(self, context, ovs_network):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_network_created(self, context, ovs_network)
+            self.ovs_network_driver.ovs_network_created(context, ovs_network)
         LOG.info(_("Create ovs network %s by driver %s"), ovs_network, self.ovs_network_driver)
 
-    def ovs_network_updated(self, context, id, ovs_network):
+    def ovs_network_updated(self, context, ovs_network):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_network_updated(self, context, id, ovs_network)
+            self.ovs_network_driver.ovs_network_updated(context, ovs_network)
         LOG.info(_("Update ovs network %s by driver %s"), ovs_network, self.ovs_network_driver)
 
     def ovs_network_deleted(self, context, id):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_network_deleted(self, context, id)
+            self.ovs_network_driver.ovs_network_deleted(context, id)
         LOG.info(_("Delete ovs network %s by driver %s"), id, self.ovs_network_driver)
 
     def ovs_link_left_endpoint_created(self, context, ovs_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_link_left_endpoint_created(self, context, ovs_link)
+            self.ovs_network_driver.ovs_link_left_endpoint_created(context, ovs_link)
         LOG.info(_("Create left endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
 
     def ovs_link_right_endpoint_created(self, context, ovs_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_link_right_endpoint_created(self, context, ovs_link)
+            self.ovs_network_driver.ovs_link_right_endpoint_created(context, ovs_link)
         LOG.info(_("Create right endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
 
     def ovs_link_left_endpoint_deleted(self, context, ovs_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_link_left_endpoint_deleted(self, context, ovs_link)
+            self.ovs_network_driver.ovs_link_left_endpoint_deleted(context, ovs_link)
         LOG.info(_("Delete left endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
 
     def ovs_link_right_endpoint_deleted(self, context, ovs_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.ovs_link_right_endpoint_deleted(self, context, ovs_link)
+            self.ovs_network_driver.ovs_link_right_endpoint_deleted(context, ovs_link)
         LOG.info(_("Delete right endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
 
     def vm_link_vm_endpoint_updated(self, context, vm_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.vm_link_vm_endpoint_updated(self, context, vm_link)
+            self.ovs_network_driver.vm_link_vm_endpoint_updated(context, vm_link)
         LOG.info(_("Update vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
 
     def vm_link_ovs_endpoint_created(self, context, vm_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.vm_link_ovs_endpoint_created(self, context, vm_link)
+            self.ovs_network_driver.vm_link_ovs_endpoint_created(context, vm_link)
         LOG.info(_("Create ovs endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
 
     def vm_link_ovs_endpoint_deleted(self, context, vm_link):
         if self.ovs_network_driver:
-            self.ovs_network_driver.vm_link_ovs_endpoint_deleted(self, context, vm_link)
+            self.ovs_network_driver.vm_link_ovs_endpoint_deleted(context, vm_link)
         LOG.info(_("Delete ovs endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)

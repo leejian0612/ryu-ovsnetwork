@@ -57,7 +57,7 @@ class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
         ovs_network = super(OVSNetworkServerRpcMixin, self).update_ovs_network(context, id, ovs_network)
         if not ovs_network:
             return
-        self.notifier.ovs_network_updated(context, id, ovs_network)
+        self.notifier.ovs_network_updated(context, ovs_network)
         return ovs_network
 
     def delete_ovs_network(self, context, id):
@@ -70,8 +70,8 @@ class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
         ovs_link = super(OVSNetworkServerRpcMixin, self).create_ovs_link(context, ovs_link)
         if not ovs_link:
             return
-        ovs_link['left_tunnel_key'] = self.tunnelkey.allocate(context.session, ovs_link['left_port_id'])
-        ovs_link['right_tunnel_key'] = self.tunnelkey.allocate(context.session, ovs_link['right_port_id'])
+        ovs_link['left_tunnel_id'] = self.tunnelkey.allocate(context.session, ovs_link['left_port_id'])
+        ovs_link['right_tunnel_id'] = self.tunnelkey.allocate(context.session, ovs_link['right_port_id'])
 
         left_host = self._get_ovs_network_host_by_id(context, ovs_link['left_ovs_id'])
         right_host = self._get_ovs_network_host_by_id(context, ovs_link['right_ovs_id'])
@@ -99,8 +99,8 @@ class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
         vm_link = super(OVSNetworkServerRpcMixin, self).create_vm_link(context, vm_link)
         if not vm_link:
             return
-        vm_link['vm_tunnel_key'] = self.tunnelkey.allocate(context.session, vm_link['vm_port_id'])
-        vm_link['ovs_tunnel_key'] = self.tunnelkey.allocate(context.session, vm_link['ovs_port_id'])
+        vm_link['vm_tunnel_id'] = self.tunnelkey.allocate(context.session, vm_link['vm_port_id'])
+        vm_link['ovs_tunnel_id'] = self.tunnelkey.allocate(context.session, vm_link['ovs_port_id'])
 
         ovs_host = self._get_ovs_network_host_by_id(context, vm_link['ovs_network_id'])
         self.notifier.vm_link_ovs_endpoint_created(context, vm_link, ovs_host)
@@ -112,27 +112,28 @@ class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
         old_vm_link = super(OVSNetworkServerRpcMixin, self).get_vm_link(context, id)
         new_vm_link = super(OVSNetworkServerRpcMixin, self).update_vm_link(context, id, vm_link)
         # Only when ovs endpoint changed, should we send notifications to the agent.
-        new_ovs_id = vm_link.get('ovs_network_id')
+        new_ovs_id = vm_link['vm_link'].get('ovs_network_id')
         if new_ovs_id:
             new_host = self._get_ovs_network_host_by_id(context, new_ovs_id)
             old_host = self._get_ovs_network_host_by_id(context, old_vm_link['ovs_network_id'])
             self.tunnelkey.delete(context.session, old_vm_link['ovs_port_id'])
-            new_vm_link['ovs_tunnel_key'] = self.tunnelkey.allocate(context.session, new_vm_link['ovs_port_id'])
-            new_vm_link['vm_tunnel_key'] = self.tunnelkey.get(context.session, new_vm_link['vm_port_id'])
-            old_vm_link['ovs_tunnel_key'] = self.tunnelkey.get(context.session, old_vm_link['ovs_port_id'])
-            old_vm_link['vm_tunnel_key'] = new_vm_link['vm_tunnel_key']
+            new_vm_link['ovs_tunnel_id'] = self.tunnelkey.allocate(context.session, new_vm_link['ovs_port_id'])
+            new_vm_link['vm_tunnel_id'] = self.tunnelkey.get(context.session, new_vm_link['vm_port_id'])
+            old_vm_link['ovs_tunnel_id'] = self.tunnelkey.get(context.session, old_vm_link['ovs_port_id'])
+            self.tunnelkey.delete(context.session, old_vm_link['ovs_port_id'])
 
             # Delete old ovs endpoint of this vm link, and create the new one, then update the vm endpoint's flow table.
             self.notifier.vm_link_ovs_endpoint_created(context, new_vm_link, new_host)
             self.notifier.vm_link_ovs_endpoint_deleted(context, old_vm_link, old_host)
+            new_vm_link['old_ovs_tunnel_id'] = old_vm_link['ovs_tunnel_id']
             self.notifier.vm_link_vm_endpoint_updated(context, new_vm_link, new_vm_link['vm_host'])
         return new_vm_link
    
     def delete_vm_link(self, context, id):
         old_vm_link = super(OVSNetworkServerRpcMixin, self).delete_vm_link(context, id)
-        old_vm_link['ovs_tunnel_key'] = self.tunnelkey.get(context.session, old_vm_link['ovs_port_id'])
+        old_vm_link['ovs_tunnel_id'] = self.tunnelkey.get(context.session, old_vm_link['ovs_port_id'])
         self.tunnelkey.delete(context.session, old_vm_link['ovs_port_id'])
-        old_vm_link['vm_tunnel_key'] = self.tunnelkey.get(context.session, old_vm_link['vm_port_id'])
+        old_vm_link['vm_tunnel_id'] = self.tunnelkey.get(context.session, old_vm_link['vm_port_id'])
         self.tunnelkey.delete(context.session, old_vm_link['vm_port_id'])
         old_host = self._get_ovs_network_host_by_id(context, old_vm_link['ovs_network_id'])
         self.notifier.vm_link_ovs_endpoint_deleted(context, old_vm_link, old_host)
