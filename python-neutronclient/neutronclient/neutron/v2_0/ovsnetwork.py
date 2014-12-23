@@ -190,6 +190,7 @@ class UpdateOVSLink(neutronV20.UpdateCommand):
         if parsed_args.right_ovs_id:
             body['ovs_link'].update(
                 {'right_ovs_link': parsed_args.right_ovs_link})
+        return body
 
 class ListVMLink(neutronV20.ListCommand):
     """List vm-links that belong to a given tenant or a specified ovs network."""
@@ -204,7 +205,7 @@ class ShowVMLink(neutronV20.ShowCommand):
     """Show information of a given vm link."""
 
     resource = 'vm_link'
-    list_columns = ['id', 'name', 'vm_host', 'vm_port_id', 'ovs_network_id', 'ovs_port_id']
+    list_columns = ['id', 'name', 'vm_host', 'vm_port_id', 'status', 'ovs_network_id', 'ovs_port_id']
     allow_names = True
 
 
@@ -255,6 +256,15 @@ class UpdateVMLink(neutronV20.UpdateCommand):
         parser.add_argument(
             '--ovs_network_id', metavar='OVS_NETWORK_ID',
             help=_("ovs network's id of the ovs link."))
+        parser.add_argument(
+            '--status', metavar='STATUS',
+            help=_("status of the ovs link."))
+        parser.add_argument(
+            '--vm_ofport', metavar='VM_OFPORT',
+            help=_("local openflow port num of vm_port."))
+        parser.add_argument(
+            '--vm_host', metavar='VM_HOST',
+            help=_("vm host of the vm link."))
 
     def args2body(self, parsed_args):
         body = {'vm_link': {}}
@@ -264,4 +274,13 @@ class UpdateVMLink(neutronV20.UpdateCommand):
         if parsed_args.ovs_network_id:
             body['vm_link'].update(
                 {'ovs_network_id': parsed_args.ovs_network_id})
+        if parsed_args.status:
+            body['vm_link'].update(
+                {'status': parsed_args.status})
+        if parsed_args.vm_ofport:
+            body['vm_link'].update(
+                {'vm_ofport': parsed_args.vm_ofport})
+        if parsed_args.vm_host:
+            body['vm_link'].update(
+                {'vm_host': parsed_args.vm_host})
         return body

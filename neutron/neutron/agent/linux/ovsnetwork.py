@@ -79,8 +79,8 @@ class OVSNetworkDriver(object):
         # add flows 
         # Improvement is needed to support multi compute nodes -- lijian
         olb_ofport = self.bridge.get_port_ofport(olb_port)
-        self.bridge.add_flow(in_port=olb_ofport, actions='set_tunnel:%s,resubmit(,1)'%ovs_link['left_tunnel_id'])
-        self.bridge.add_flow(table='1', tun_id=ovs_link['right_tunnel_id'], actions='output:%s'%olb_ofport)
+        self.bridge.add_flow(table='0', priority=10, in_port=olb_ofport, actions='set_tunnel:%s,resubmit(,1)'%ovs_link['left_tunnel_id'])
+        self.bridge.add_flow(table='1', priority=10, tun_id=ovs_link['right_tunnel_id'], actions='output:%s'%olb_ofport)
         LOG.info(_("Left endpoint of ovs link %s is created successfully.\n"), ovs_link)
 
     def ovs_link_right_endpoint_created(self, context, ovs_link):
@@ -94,8 +94,8 @@ class OVSNetworkDriver(object):
         # add flows 
         # Improvement needed to support multi compute nodes -- lijian
         olb_ofport = self.bridge.get_port_ofport(olb_port)
-        self.bridge.add_flow(in_port=olb_ofport, actions='set_tunnel:%s,resubmit(,1)'%ovs_link['right_tunnel_id'])
-        self.bridge.add_flow(table='1', tun_id=ovs_link['left_tunnel_id'], actions='output:%s'%olb_ofport)
+        self.bridge.add_flow(table='0', priority=10, in_port=olb_ofport, actions='set_tunnel:%s,resubmit(,1)'%ovs_link['right_tunnel_id'])
+        self.bridge.add_flow(table='1', priority=10, tun_id=ovs_link['left_tunnel_id'], actions='output:%s'%olb_ofport)
         LOG.info(_("Right endpoint of ovs link %s is created successfully.\n"), ovs_link)
 
     def ovs_link_left_endpoint_deleted(self, context, ovs_link):
@@ -108,7 +108,7 @@ class OVSNetworkDriver(object):
         ip_link_device.link.delete()
        
         #delete flows       
-        self.bridge.delete_flows(in_port=olb_ofport)
+        self.bridge.delete_flows(table='0', in_port=olb_ofport)
         self.bridge.delete_flows(table='1', tun_id=ovs_link['right_tunnel_id'])
         LOG.info(_("Left endpoint of ovs link %s is deleted successfully.\n"), ovs_link)
 
@@ -122,7 +122,7 @@ class OVSNetworkDriver(object):
         ip_link_device.link.delete()
        
         #delete flows       
-        self.bridge.delete_flows(in_port=olb_ofport)
+        self.bridge.delete_flows(table='0', in_port=olb_ofport)
         self.bridge.delete_flows(table='1', tun_id=ovs_link['left_tunnel_id'])
         LOG.info(_("Right endpoint of ovs link %s is deleted successfully.\n"), ovs_link)
   
@@ -130,8 +130,8 @@ class OVSNetworkDriver(object):
         return (("vlo%s" % id)[:self.NIC_NAME_LEN],
                 ("vlb%s" % id)[:self.NIC_NAME_LEN])
 
-    def get_vm_link_vm_endpoint_ovs_port_name(self, id):
-        return ("qvo%s" % id)[:self.NIC_NAME_LEN]
+    #def get_vm_link_vm_endpoint_ovs_port_name(self, id):
+    #    return ("qvo%s" % id)[:self.NIC_NAME_LEN]
 
     def vm_link_ovs_endpoint_created(self, context, vm_link):
         vlo_port,vlb_port  = self.get_vm_link_ovs_endpoint_pair_names(vm_link['ovs_port_id'])
@@ -141,8 +141,8 @@ class OVSNetworkDriver(object):
         self.bridge.add_port(vlb_port)
 
         vlb_ofport = self.bridge.get_port_ofport(vlb_port)
-        self.bridge.add_flow(in_port=vlb_ofport, actions='set_tunnel:%s,resubmit(,1)'%vm_link['ovs_tunnel_id'])
-        self.bridge.add_flow(table='1', tun_id=vm_link['vm_tunnel_id'], actions='output:%s'%vlb_ofport)
+        self.bridge.add_flow(table='0', priority=10, in_port=vlb_ofport, actions='set_tunnel:%s,resubmit(,1)'%vm_link['ovs_tunnel_id'])
+        self.bridge.add_flow(table='1', priority=10, tun_id=vm_link['vm_tunnel_id'], actions='output:%s'%vlb_ofport)
         LOG.info(_("OVS endpoint of vm link %s is created successfully.\n"), vm_link)
 
     def vm_link_ovs_endpoint_deleted(self, context, vm_link):
@@ -155,14 +155,24 @@ class OVSNetworkDriver(object):
         ip_link_device.link.delete()
        
         #delete flows       
-        self.bridge.delete_flows(in_port=vlb_ofport)
+        self.bridge.delete_flows(table='0', in_port=vlb_ofport)
         self.bridge.delete_flows(table='1', tun_id=vm_link['vm_tunnel_id'])
         LOG.info(_("OVS endpoint of vm link %s is deleted successfully.\n"), vm_link)
 
+    def vm_link_vm_endpoint_created(self, context, vm_link):
+        vlb_ofport = vm_link['vm_ofport']
+        self.bridge.add_flow(table='0', priority=10, in_port=vlb_ofport, actions='set_tunnel:%s,resubmit(,1)'%vm_link['vm_tunnel_id'])
+        self.bridge.add_flow(table='1', priority=10, tun_id=vm_link['ovs_tunnel_id'], actions='output:%s'%vlb_ofport)
+        LOG.info(_("VM endpoint of vm link %s is Created successfully.\n"), vm_link)
+
     def vm_link_vm_endpoint_updated(self, context, vm_link):
-        vlb_port = self.get_vm_link_vm_endpoint_ovs_port_name(vm_link['vm_port_id'])
-        vlb_ofport = self.bridge.get_port_ofport(vlb_port)
+        vlb_ofport = vm_link['vm_ofport']
         self.bridge.delete_flows(table='1', tun_id=vm_link['old_ovs_tunnel_id'])
-        LOG.info(_("lijian vlb_ofport %s\nold_ovs_tunnel_id  %s\novs_tunnel_id %s\n"), vlb_ofport, vm_link['old_ovs_tunnel_id'], vm_link['ovs_tunnel_id'])
         self.bridge.add_flow(table='1', tun_id=vm_link['ovs_tunnel_id'], actions='output:%s'%vlb_ofport)
+        LOG.info(_("VM endpoint of vm link %s is updated successfully.\n"), vm_link)
+
+    def vm_link_vm_endpoint_deleted(self, context, vm_link):
+        vlb_ofport = vm_link['vm_ofport']
+        self.bridge.delete_flows(table='0', in_port=vlb_ofport)
+        self.bridge.delete_flow(table='1', tun_id=vm_link['ovs_tunnel_id'])
         LOG.info(_("VM endpoint of vm link %s is updated successfully.\n"), vm_link)

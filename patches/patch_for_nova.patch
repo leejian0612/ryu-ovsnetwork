@@ -1,0 +1,120 @@
+From 8c32bc66b2e8fd5f17972eb73f4d567ddd80ab5c Mon Sep 17 00:00:00 2001
+From: leejian0612 <leejian0612@gmail.com>
+Date: Tue, 23 Dec 2014 11:40:07 +0800
+Subject: [PATCH] Change nova to support to connetct an VM by VMLink
+
+---
+ nova/compute/manager.py       | 15 +++++++++++++++
+ nova/network/neutronv2/api.py | 22 ++++++++++++++++++++++
+ nova/virt/libvirt/driver.py   |  4 ++++
+ nova/virt/libvirt/vif.py      |  6 ++++++
+ 4 files changed, 47 insertions(+)
+
+diff --git a/nova/compute/manager.py b/nova/compute/manager.py
+index 260a2b7..58cb49d 100644
+--- a/nova/compute/manager.py
++++ b/nova/compute/manager.py
+@@ -1207,6 +1207,13 @@ class ComputeManager(manager.Manager):
+                     injected_files, admin_password, is_first_time, node,
+                     instance, image_meta, legacy_bdm_in_spec)
+             notify("end", msg=_("Success"), network_info=network_info)
++            
++            for vif in network_info:
++                if vif['network']['label'] == 'shadow-ovs-network':
++                    vm_ofport = self.driver.get_vm_ofport(vif)
++                    port_id = vif['ovs_interfaceid']
++                    vm_host = instance.get('host')
++                    self.network_api.update_vm_link(context, port_id, vm_ofport, vm_host)
+ 
+         except exception.RescheduledException as e:
+             # Instance build encountered an error, and has been rescheduled.
+@@ -2197,6 +2204,8 @@ class ComputeManager(manager.Manager):
+         as necessary.
+         """
+         instance_uuid = instance['uuid']
++        # This is used to support vm link
++        network_info = self._get_instance_nw_info(context, instance)
+ 
+         was_soft_deleted = instance['vm_state'] == vm_states.SOFT_DELETED
+         if was_soft_deleted:
+@@ -2243,6 +2252,12 @@ class ComputeManager(manager.Manager):
+                 context, obj_base.obj_to_primitive(instance))
+             instance = instance_obj.Instance._from_db_object(context, instance,
+                                                              db_inst)
++
++            for vif in network_info:
++                if vif['network']['label'] == 'shadow-ovs-network':
++                    port_id = vif['ovs_interfaceid']
++                    self.network_api.delete_vm_link(context, port_id)
++
+         except Exception:
+             with excutils.save_and_reraise_exception():
+                 quotas.rollback()
+diff --git a/nova/network/neutronv2/api.py b/nova/network/neutronv2/api.py
+index 763503b..c3bbb6a 100644
+--- a/nova/network/neutronv2/api.py
++++ b/nova/network/neutronv2/api.py
+@@ -194,6 +194,28 @@ class API(base.Base):
+                 LOG.exception(_('Neutron error creating port on network %s'),
+                               network_id, instance=instance)
+ 
++    def update_vm_link(self, context, port_id, vm_ofport, vm_host):
++        neutron = neutronv2.get_client(context, admin=True)
++        filters = {'vm_port_id': port_id}
++        vm_links = neutron.list_vm_links(**filters)
++        LOG.debug(_("lijian vm_links is %s\n"), vm_links)
++        if vm_links:
++            vm_links = vm_links['vm_links']
++            id = vm_links[0]['id']
++            vm_link_req_body = {'vm_link':{'vm_host':vm_host,
++                                           'vm_ofport':vm_ofport,
++                                           'status':'ACTIVE'}}
++            neutron.update_vm_link(id, vm_link_req_body)
++
++    def delete_vm_link(self, context, port_id):
++        neutron = neutronv2.get_client(context, admin=True)
++        filters = {'vm_port_id': port_id}
++        vm_links = neutron.list_vm_links(**filters)
++        if vm_links:
++            vm_links = vm_links['vm_links']
++            id = vm_links[0]['id']
++            neutron.delete_vm_link(id)
++
+     def allocate_for_instance(self, context, instance, **kwargs):
+         """Allocate network resources for the instance.
+ 
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index c5a6398..8b1b612 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -854,6 +854,10 @@ class LibvirtDriver(driver.ComputeDriver):
+                 continue
+ 
+         return list(uuids)
++    
++    def get_vm_ofport(self, vif):
++        vm_ofport = self.vif_driver.get_vm_ofport(vif)
++        return vm_ofport
+ 
+     def plug_vifs(self, instance, network_info):
+         """Plug VIFs into networks."""
+diff --git a/nova/virt/libvirt/vif.py b/nova/virt/libvirt/vif.py
+index f37b769..6bb49f9 100644
+--- a/nova/virt/libvirt/vif.py
++++ b/nova/virt/libvirt/vif.py
+@@ -461,6 +461,12 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
+                                           v2_name, iface_id, vif['address'],
+                                           instance['uuid'])
+ 
++    def get_vm_ofport(self, vif):
++        v1_name, v2_name = self.get_veth_pair_names(vif['id'])
++        vm_ofport = linux_net._ovs_vsctl(['get', 'Interface', v2_name, 'ofport'])[0].strip()
++        LOG.debug(_("lijian v2_name is %s, and vm_ofport is %s"), v2_name, vm_ofport)
++        return vm_ofport
++
+     def plug_ovs(self, instance, vif):
+         if self.get_firewall_required(vif) or vif.is_hybrid_plug_enabled():
+             self.plug_ovs_hybrid(instance, vif)
+-- 
+1.9.1
+

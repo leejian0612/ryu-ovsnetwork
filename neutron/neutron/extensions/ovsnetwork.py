@@ -59,6 +59,15 @@ def convert_to_validate_port_num(port):
         return val
     else:
         raise InvalidPortNum(port=port)
+
+def convert_to_int_or_none(val):
+    if val is None:
+        return val
+    try:
+        val = int(val)
+    except (ValueError, TypeError):
+        return None
+    return val
         
 RESOURCE_ATTRIBUTE_MAP = {
     'ovs_networks' : {
@@ -99,17 +108,31 @@ RESOURCE_ATTRIBUTE_MAP = {
                  'validate': {'type:string': None},
                  'is_visible': True,
                  'default': ''},
-        'vm_host': {'allow_post': True, 'allow_put': False,
+        'vm_host': {'allow_post': True, 'allow_put': True,
                     'validate': {'type:string': None},
                     'is_visible': True,
                     'default': ''},
+        'vm_ofport': {'allow_post': True, 'allow_put': True,
+                      'convert_to': convert_to_int_or_none,
+                      'is_visible': True,
+                      'default': 65534},
+        'status': {'allow_post': True, 'allow_put': True,
+                   'validate': {'type:string': None},
+                   'is_visible': True,
+                   'default': 'PENDING'},
         'ovs_network_id': {'allow_post': True, 'allow_put': True,
                            'validate': {'type:string': None},
                            'is_visible': True},
         'ovs_network_name': {'allow_post': True, 'allow_put': True,
                              'validate': {'type:string': None},
                              'is_visible': True,
-                             'default': ''}
+                             'default': ''},
+        'vm_port_id': {'allow_post': False, 'allow_put': False,
+                       'validate': {'type:string': None},
+                       'is_visible': True},
+        'ovs_port_id': {'allow_post': False, 'allow_put': False,
+                        'validate': {'type:string': None},
+                        'is_visible': True},
     },
     'ovs_links' : {
         'id': {'allow_post': False, 'allow_put': False,
@@ -137,7 +160,13 @@ RESOURCE_ATTRIBUTE_MAP = {
         'right_ovs_name': {'allow_post': True, 'allow_put': True,
                            'validate': {'type:string': None},
                            'is_visible': True,
-                           'default': ''}
+                           'default': ''},
+        'left_port_id': {'allow_post': False, 'allow_put': False,
+                         'validate': {'type:string': None},
+                         'is_visible': True},
+        'right_port_id': {'allow_post': False, 'allow_put': False,
+                          'validate': {'type:string': None},
+                          'is_visible': True},
     }
 }
 

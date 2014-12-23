@@ -1,0 +1,459 @@
+From 431cfc073f4d025cabb7165d1bc46a4a7c04519c Mon Sep 17 00:00:00 2001
+From: leejian0612 <leejian0612@gmail.com>
+Date: Mon, 24 Nov 2014 15:45:17 +0800
+Subject: [PATCH] Change neutron client to support ovs network extension!
+
+---
+ neutronclient/neutron/v2_0/ovsnetwork.py | 286 +++++++++++++++++++++++++++++++
+ neutronclient/shell.py                   |  16 ++
+ neutronclient/v2_0/client.py             |  93 ++++++++++
+ 3 files changed, 395 insertions(+)
+ create mode 100644 neutronclient/neutron/v2_0/ovsnetwork.py
+
+diff --git a/neutronclient/neutron/v2_0/ovsnetwork.py b/neutronclient/neutron/v2_0/ovsnetwork.py
+new file mode 100644
+index 0000000..c1dda79
+--- /dev/null
++++ b/neutronclient/neutron/v2_0/ovsnetwork.py
+@@ -0,0 +1,286 @@
++# Copyright 2012 OpenStack Foundation.
++# All Rights Reserved
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++#
++
++import argparse
++import logging
++
++from neutronclient.common import exceptions
++from neutronclient.neutron import v2_0 as neutronV20
++from neutronclient.openstack.common.gettextutils import _
++
++_logger = logging.getLogger(__name__)
++
++class ListOVSNetwork(neutronV20.ListCommand):
++    """List ovs-networks that belong to a given tenant."""
++
++    resource = 'ovs_network'
++    list_columns = ['id', 'name', 'host']
++    pagination_support = True
++    sorting_support = True
++
++
++class ShowOVSNetwork(neutronV20.ShowCommand):
++    """Show information of a given ovs network."""
++
++    resource = 'ovs_network'
++    list_columns = ['id', 'name', 'host', 'controller_ipv4_address', 'controller_port_num']
++    allow_names = True
++
++
++class CreateOVSNetwork(neutronV20.CreateCommand):
++    """Create a ovs network."""
++
++    resource = 'ovs_network'
++
++    def add_known_arguments(self, parser):
++        parser.add_argument(
++            '--name', metavar='NAME',
++            help=_('Name of ovs network.'))
++        parser.add_argument(
++            '--host',
++            help=_('Host of ovs network.'))
++        parser.add_argument(
++            '--controller_ipv4_address', metavar='IPADDR',
++            help=_('Controller ipv4 address of the ovs network.'))
++        parser.add_argument(
++            '--controller_port_num',
++            type=int,
++            help=_('Controller port num of the ovs network.'))
++
++    def args2body(self, parsed_args):
++        body = {'ovs_network': {}}
++        if parsed_args.name:
++            body['ovs_network'].update(
++                {'name': parsed_args.name})
++        if parsed_args.host:
++            body['ovs_network'].update(
++                {'host': parsed_args.host})
++        if parsed_args.controller_ipv4_address:
++            body['ovs_network'].update(
++                {'controller_port_num': parsed_args.controller_ipv4_address})
++        if parsed_args.controller_port_num:
++            body['ovs_network'].update({'controller_port_num': parsed_args.controller_port_num})
++        return body
++
++
++class DeleteOVSNetwork(neutronV20.DeleteCommand):
++    """Delete a given ovs network."""
++
++    resource = 'ovs_network'
++    allow_names = True
++
++
++class UpdateOVSNetwork(neutronV20.UpdateCommand):
++    """Update a given ovs network."""
++
++    resource = 'ovs_network'
++
++    def add_known_arguments(self, parser):
++        parser.add_argument(
++            '--name',
++            help=_('Name of ovs network.'))
++        parser.add_argument(
++            '--controller_ipv4_address', metavar='IPADDR',
++            help=_('Controller ipv4 address of the ovs network.'))
++        parser.add_argument(
++            '--controller_port_num',
++            type=int,
++            help=_('Controller port num of the ovs network.'))
++
++    def args2body(self, parsed_args):
++        body = {'ovs_network': {}}
++        if parsed_args.name:
++            body['ovs_network'].update(
++                {'name': parsed_args.name})
++        if parsed_args.controller_ipv4_address:
++            body['ovs_network'].update(
++                {'controller_ipv4_address': parsed_args.controller_ipv4_address})
++        if parsed_args.controller_port_num:
++            body['ovs_network'].update(
++                {'controller_port_num': parsed_args.controller_port_num})
++        return body
++
++class ListOVSLink(neutronV20.ListCommand):
++    """List ovs-links that belong to a given tenant or a specified ovs network."""
++
++    resource = 'ovs_link'
++    list_columns = ['id', 'name', 'left_ovs_id', 'right_ovs_id']
++    pagination_support = True
++    sorting_support = True
++
++
++class ShowOVSLink(neutronV20.ShowCommand):
++    """Show information of a given ovs link."""
++
++    resource = 'ovs_link'
++    list_columns = ['id', 'name', 'left_ovs_id', 'left_port_id', 'right_ovs_id', 'right_port_id']
++    allow_names = True
++
++
++class CreateOVSLink(neutronV20.CreateCommand):
++    """Create a ovs link."""
++
++    resource = 'ovs_link'
++
++    def add_known_arguments(self, parser):
++        parser.add_argument(
++            '--name', metavar='NAME',
++            help=_('Name of ovs network.'))
++        parser.add_argument(
++            'left_ovs_id', metavar='OVS_NETWORK_ID',
++            help=_("Left ovs network's id of the ovs link."))
++        parser.add_argument(
++            'right_ovs_id', metavar='OVS_NETWORK_ID',
++            help=_("Right ovs network's id of the ovs link."))
++
++    def args2body(self, parsed_args):
++        body = {'ovs_link': {
++            'left_ovs_id': parsed_args.left_ovs_id,
++            'right_ovs_id':parsed_args.right_ovs_id}}
++        if parsed_args.name:
++            body['ovs_link'].update(
++                {'name': parsed_args.name})
++        return body
++
++
++class DeleteOVSLink(neutronV20.DeleteCommand):
++    """Delete a given ovs link."""
++
++    resource = 'ovs_link'
++    allow_names = True
++
++
++class UpdateOVSLink(neutronV20.UpdateCommand):
++    """Update a given ovs link."""
++
++    resource = 'ovs_link'
++
++    def add_known_arguments(self, parser):
++        parser.add_argument(
++            '--name',
++            help=_('Name of ovs link.'))
++        parser.add_argument(
++            '--left_ovs_id', metavar='OVS_NETWORK_ID',
++            help=_("Left ovs network's id of the ovs link."))
++        parser.add_argument(
++            '--right_ovs_id', metavar='OVS_NETWORK_ID',
++            help=_("Right ovs network's id of the ovs link."))
++
++    def args2body(self, parsed_args):
++        body = {'ovs_link': {}}
++        if parsed_args.name:
++            body['ovs_link'].update(
++                {'name': parsed_args.name})
++        if parsed_args.left_ovs_id:
++            body['ovs_link'].update(
++                {'left_ovs_link': parsed_args.left_ovs_link})
++        if parsed_args.right_ovs_id:
++            body['ovs_link'].update(
++                {'right_ovs_link': parsed_args.right_ovs_link})
++        return body
++
++class ListVMLink(neutronV20.ListCommand):
++    """List vm-links that belong to a given tenant or a specified ovs network."""
++
++    resource = 'vm_link'
++    list_columns = ['id', 'name', 'ovs_network_id']
++    pagination_support = True
++    sorting_support = True
++
++
++class ShowVMLink(neutronV20.ShowCommand):
++    """Show information of a given vm link."""
++
++    resource = 'vm_link'
++    list_columns = ['id', 'name', 'vm_host', 'vm_port_id', 'status', 'ovs_network_id', 'ovs_port_id']
++    allow_names = True
++
++
++class CreateVMLink(neutronV20.CreateCommand):
++    """Create a vm link."""
++
++    resource = 'vm_link'
++
++    def add_known_arguments(self, parser):
++        parser.add_argument(
++            '--name', metavar='NAME',
++            help=_('Name of ovs network.'))
++        parser.add_argument(
++            '--vm_host', metavar='VM_HOST',
++            help=_("vm's host for this vm link."))
++        parser.add_argument(
++            'ovs_network_id', metavar='OVS_NETWORK_ID',
++            help=_("ovs network's id of the ovs link."))
++
++    def args2body(self, parsed_args):
++        body = {'vm_link': {
++            'ovs_network_id':parsed_args.ovs_network_id}}
++        if parsed_args.name:
++            body['vm_link'].update(
++                {'name': parsed_args.name})
++        if parsed_args.vm_host:
++            body['vm_link'].update(
++                {'vm_host': parsed_args.vm_host})
++        return body
++
++
++class DeleteVMLink(neutronV20.DeleteCommand):
++    """Delete a given vm link."""
++
++    resource = 'vm_link'
++    allow_names = True
++
++
++class UpdateVMLink(neutronV20.UpdateCommand):
++    """Update a given vm link."""
++
++    resource = 'vm_link'
++
++    def add_known_arguments(self, parser):
++        parser.add_argument(
++            '--name',
++            help=_('Name of vm link.'))
++        parser.add_argument(
++            '--ovs_network_id', metavar='OVS_NETWORK_ID',
++            help=_("ovs network's id of the ovs link."))
++        parser.add_argument(
++            '--status', metavar='STATUS',
++            help=_("status of the ovs link."))
++        parser.add_argument(
++            '--vm_ofport', metavar='VM_OFPORT',
++            help=_("local openflow port num of vm_port."))
++        parser.add_argument(
++            '--vm_host', metavar='VM_HOST',
++            help=_("vm host of the vm link."))
++
++    def args2body(self, parsed_args):
++        body = {'vm_link': {}}
++        if parsed_args.name:
++            body['vm_link'].update(
++                {'name': parsed_args.name})
++        if parsed_args.ovs_network_id:
++            body['vm_link'].update(
++                {'ovs_network_id': parsed_args.ovs_network_id})
++        if parsed_args.status:
++            body['vm_link'].update(
++                {'status': parsed_args.status})
++        if parsed_args.vm_ofport:
++            body['vm_link'].update(
++                {'vm_ofport': parsed_args.vm_ofport})
++        if parsed_args.vm_host:
++            body['vm_link'].update(
++                {'vm_host': parsed_args.vm_host})
++        return body
+diff --git a/neutronclient/shell.py b/neutronclient/shell.py
+index 442eac8..da2ea8a 100644
+--- a/neutronclient/shell.py
++++ b/neutronclient/shell.py
+@@ -68,6 +68,7 @@ from neutronclient.neutron.v2_0.vpn import ikepolicy
+ from neutronclient.neutron.v2_0.vpn import ipsec_site_connection
+ from neutronclient.neutron.v2_0.vpn import ipsecpolicy
+ from neutronclient.neutron.v2_0.vpn import vpnservice
++from neutronclient.neutron.v2_0 import ovsnetwork
+ from neutronclient.openstack.common.gettextutils import _
+ from neutronclient.openstack.common import strutils
+ from neutronclient.version import __version__
+@@ -295,6 +296,21 @@ COMMAND_V2 = {
+     'nec-packet-filter-create': packetfilter.CreatePacketFilter,
+     'nec-packet-filter-update': packetfilter.UpdatePacketFilter,
+     'nec-packet-filter-delete': packetfilter.DeletePacketFilter,
++    'ovs-network-list': ovsnetwork.ListOVSNetwork,
++    'ovs-network-show': ovsnetwork.ShowOVSNetwork,
++    'ovs-network-create': ovsnetwork.CreateOVSNetwork,
++    'ovs-network-update': ovsnetwork.UpdateOVSNetwork,
++    'ovs-network-delete': ovsnetwork.DeleteOVSNetwork,
++    'ovs-link-list': ovsnetwork.ListOVSLink,
++    'ovs-link-show': ovsnetwork.ShowOVSLink,
++    'ovs-link-create': ovsnetwork.CreateOVSLink,
++    'ovs-link-update': ovsnetwork.UpdateOVSLink,
++    'ovs-link-delete': ovsnetwork.DeleteOVSLink,
++    'vm-link-list': ovsnetwork.ListVMLink,
++    'vm-link-show': ovsnetwork.ShowVMLink,
++    'vm-link-create': ovsnetwork.CreateVMLink,
++    'vm-link-update': ovsnetwork.UpdateVMLink,
++    'vm-link-delete': ovsnetwork.DeleteVMLink
+ }
+ 
+ COMMANDS = {'2.0': COMMAND_V2}
+diff --git a/neutronclient/v2_0/client.py b/neutronclient/v2_0/client.py
+index fcce028..f82d100 100644
+--- a/neutronclient/v2_0/client.py
++++ b/neutronclient/v2_0/client.py
+@@ -226,6 +226,12 @@ class Client(object):
+     firewall_path = "/fw/firewalls/%s"
+     net_partitions_path = "/net-partitions"
+     net_partition_path = "/net-partitions/%s"
++    ovs_networks_path = "/ovs-networks"
++    ovs_network_path = "/ovs-networks/%s"
++    ovs_links_path = "/ovs-links"
++    ovs_link_path = "/ovs-links/%s"
++    vm_links_path = "/vm-links"
++    vm_link_path = "/vm-links/%s"
+ 
+     # API has no way to report plurals, so we have to hard code them
+     EXTED_PLURALS = {'routers': 'router',
+@@ -251,6 +257,9 @@ class Client(object):
+                      'metering_label_rules': 'metering_label_rule',
+                      'net_partitions': 'net_partition',
+                      'packet_filters': 'packet_filter',
++                     'ovs_networks': 'ovs_network',
++                     'ovs_links': 'ovs_link',
++                     'vm_links': 'vm_link',
+                      }
+     # 8192 Is the default max URI len for eventlet.wsgi.server
+     MAX_URI_LEN = 8192
+@@ -1191,6 +1200,90 @@ class Client(object):
+         """Delete the specified packet filter."""
+         return self.delete(self.packet_filter_path % packet_filter_id)
+ 
++    @APIParamsCall
++    def create_ovs_network(self, body=None):
++        """Creates a new ovs network."""
++        return self.post(self.ovs_networks_path, body=body)
++
++    @APIParamsCall
++    def update_ovs_network(self, ovs_network, body=None):
++        """Updates a ovs network."""
++        return self.put(self.ovs_network_path %
++                        ovs_network, body=body)
++
++    @APIParamsCall
++    def list_ovs_networks(self, retrieve_all=True, **_params):
++        """Fetches a list of all ovs networks for a tenant."""
++        return self.list('ovs_networks', self.ovs_networks_path,
++                         retrieve_all, **_params)
++
++    @APIParamsCall
++    def show_ovs_network(self, ovs_network, **_params):
++        """Fetches information of a certain ovs network."""
++        return self.get(self.ovs_network_path % (ovs_network),
++                        params=_params)
++
++    @APIParamsCall
++    def delete_ovs_network(self, ovs_network):
++        """Deletes the specified security group."""
++        return self.delete(self.ovs_network_path % (ovs_network))
++
++    @APIParamsCall
++    def create_ovs_link(self, body=None):
++        """Creates a new ovs link used to connect two ovses."""
++        return self.post(self.ovs_links_path, body=body)
++
++    @APIParamsCall
++    def update_ovs_link(self, ovs_link, body=None):
++        """Updates a ovs link."""
++        return self.put(self.ovs_link_path %
++                        ovs_link, body=body)
++
++    @APIParamsCall
++    def list_ovs_links(self, retrieve_all=True, **_params):
++        """Fetches a list of all ovs links for a tenant or a specified ovs network."""
++        return self.list('ovs_links', self.ovs_links_path,
++                         retrieve_all, **_params)
++
++    @APIParamsCall
++    def show_ovs_link(self, ovs_link, **_params):
++        """Fetches information of a certain ovs link."""
++        return self.get(self.ovs_link_path % (ovs_link),
++                        params=_params)
++
++    @APIParamsCall
++    def delete_ovs_link(self, ovs_link):
++        """Deletes the specified ovs link."""
++        return self.delete(self.ovs_link_path % (ovs_link))
++
++    @APIParamsCall
++    def create_vm_link(self, body=None):
++        """Creates a new vm link used to connect an vm to the ovs network."""
++        return self.post(self.vm_links_path, body=body)
++
++    @APIParamsCall
++    def update_vm_link(self, vm_link, body=None):
++        """Updates a vm link."""
++        return self.put(self.vm_link_path %
++                        vm_link, body=body)
++
++    @APIParamsCall
++    def list_vm_links(self, retrieve_all=True, **_params):
++        """Fetches a list of all vm links for a tenant or a specified ovs network."""
++        return self.list('vm_links', self.vm_links_path,
++                         retrieve_all, **_params)
++
++    @APIParamsCall
++    def show_vm_link(self, vm_link, **_params):
++        """Fetches information of a certain vm link."""
++        return self.get(self.vm_link_path % (vm_link),
++                        params=_params)
++
++    @APIParamsCall
++    def delete_vm_link(self, vm_link):
++        """Deletes the specified vm link."""
++        return self.delete(self.vm_link_path % (vm_link))
++
+     def __init__(self, **kwargs):
+         """Initialize a new client for the Neutron v2.0 API."""
+         super(Client, self).__init__()
+-- 
+1.9.1
+

@@ -1,0 +1,1910 @@
+diff --git a/neutron/agent/linux/ovsnetwork.py b/neutron/agent/linux/ovsnetwork.py
+new file mode 100644
+index 0000000..bdecae6
+--- /dev/null
++++ b/neutron/agent/linux/ovsnetwork.py
+@@ -0,0 +1,178 @@
++from oslo.config import cfg
++
++from neutron.agent.linux import ovs_lib
++from neutron.agent.linux import ip_lib
++from neutron.openstack.common import log as logging
++
++LOG = logging.getLogger(__name__)
++
++
++class OVSNetworkDriver(object):
++    """The driver for ovs network extension implementation on the agent side."""
++    
++    NIC_NAME_LEN = 14
++
++    def __init__(self):
++        self.root_helper = cfg.CONF.AGENT.root_helper
++        self.ip_wrapper = ip_lib.IPWrapper(root_helper=self.root_helper)
++        self.bridge = ovs_lib.OVSBridge('br-int', self.root_helper)
++        LOG.info(_("OVSNetworkDriver is initialized successfully.\n"))
++   
++    def get_ovs_network_name_from_id(self, id):
++        ovs_network_name = 'ovs' + str(id)
++        return ovs_network_name[:self.NIC_NAME_LEN]
++
++    def get_ovs_network_br(self, ovs_network_id):
++        ovs_network_name = self.get_ovs_network_name_from_id(ovs_network_id)
++        ovs_network_br = ovs_lib.OVSBridge(ovs_network_name, self.root_helper)
++        return ovs_network_br
++
++    def get_ovs_network_controller_name(self, ovs_network):
++        if ovs_network['controller_ipv4_address'] and ovs_network['controller_port_num']:
++            controller_name = str(''.join(['tcp:', ovs_network['controller_ipv4_address'], ':', str(ovs_network['controller_port_num'])]))
++        else:
++            controller_name = None
++        return controller_name
++
++    def ovs_network_created(self, context, ovs_network):
++        ovs_network_br = self.get_ovs_network_br(ovs_network['id'])
++        ovs_network_br.create()
++        controller_name = self.get_ovs_network_controller_name(ovs_network)
++        if controller_name:
++            ovs_network_br.set_controller([controller_name])
++        LOG.info(_("OVS Network %s is created successfully, and it's controller is %s.\n"), ovs_network, controller_name)
++
++    def ovs_network_updated(self, context, ovs_network):
++        controller_name = self.get_ovs_network_controller_name(ovs_network)
++        if controller_name:
++            ovs_network_br = self.get_ovs_network_br(ovs_network['id'])
++            try:
++                if ovs_network_br.get_controller():
++                    ovs_network_br.del_controller()
++            finally:
++                ovs_network_br.set_controller([controller_name])
++            LOG.info(_("OVS Network %s is updated successfully, and it's controller is %s"), id, controller_name)
++
++    def ovs_network_deleted(self, context, id):
++        ovs_network_br = self.get_ovs_network_br(id)
++        ovs_network_br.destroy()
++        LOG.info(_("OVS Network %s is deleted successfully."), id)
++
++    def get_ovs_link_pair_names(self, id):
++        # veth pair names for ports of ovs link, 
++        # olo is short for ovs link's port on ovs network side
++        # olb is short for ovs link's port on br-int side
++        return (("olo%s" % id)[:self.NIC_NAME_LEN],
++                ("olb%s" % id)[:self.NIC_NAME_LEN])
++
++    def create_veth_pair_ports(self, name1, name2):
++        self.ip_wrapper.add_veth(name1, name2)
++
++    def ovs_link_left_endpoint_created(self, context, ovs_link):
++        # create veth ports and add them to ovs bridges
++        olo_port,olb_port = self.get_ovs_link_pair_names(ovs_link['left_port_id'])
++        self.create_veth_pair_ports(olo_port, olb_port)
++        ovs_network_br = self.get_ovs_network_br(ovs_link['left_ovs_id'])
++        ovs_network_br.add_port(olo_port)
++        self.bridge.add_port(olb_port)
++        
++        # add flows 
++        # Improvement is needed to support multi compute nodes -- lijian
++        olb_ofport = self.bridge.get_port_ofport(olb_port)
++        self.bridge.add_flow(table='0', priority=10, in_port=olb_ofport, actions='set_tunnel:%s,resubmit(,1)'%ovs_link['left_tunnel_id'])
++        self.bridge.add_flow(table='1', priority=10, tun_id=ovs_link['right_tunnel_id'], actions='output:%s'%olb_ofport)
++        LOG.info(_("Left endpoint of ovs link %s is created successfully.\n"), ovs_link)
++
++    def ovs_link_right_endpoint_created(self, context, ovs_link):
++        # create veth ports and add them to ovs bridges
++        olo_port,olb_port = self.get_ovs_link_pair_names(ovs_link['right_port_id'])
++        self.create_veth_pair_ports(olo_port, olb_port)
++        ovs_network_br = self.get_ovs_network_br(ovs_link['right_ovs_id'])
++        ovs_network_br.add_port(olo_port)
++        self.bridge.add_port(olb_port)
++        
++        # add flows 
++        # Improvement needed to support multi compute nodes -- lijian
++        olb_ofport = self.bridge.get_port_ofport(olb_port)
++        self.bridge.add_flow(table='0', priority=10, in_port=olb_ofport, actions='set_tunnel:%s,resubmit(,1)'%ovs_link['right_tunnel_id'])
++        self.bridge.add_flow(table='1', priority=10, tun_id=ovs_link['left_tunnel_id'], actions='output:%s'%olb_ofport)
++        LOG.info(_("Right endpoint of ovs link %s is created successfully.\n"), ovs_link)
++
++    def ovs_link_left_endpoint_deleted(self, context, ovs_link):
++        olo_port,olb_port = self.get_ovs_link_pair_names(ovs_link['left_port_id'])
++        olb_ofport = self.bridge.get_port_ofport(olb_port)
++        ovs_network_br = self.get_ovs_network_br(ovs_link['left_ovs_id'])
++        ovs_network_br.delete_port(olo_port)
++        self.bridge.delete_port(olb_port)
++        ip_link_device = ip_lib.IPDevice(olb_port, root_helper=self.root_helper)
++        ip_link_device.link.delete()
++       
++        #delete flows       
++        self.bridge.delete_flows(table='0', in_port=olb_ofport)
++        self.bridge.delete_flows(table='1', tun_id=ovs_link['right_tunnel_id'])
++        LOG.info(_("Left endpoint of ovs link %s is deleted successfully.\n"), ovs_link)
++
++    def ovs_link_right_endpoint_deleted(self, context, ovs_link):
++        olo_port,olb_port = self.get_ovs_link_pair_names(ovs_link['right_port_id'])
++        olb_ofport = self.bridge.get_port_ofport(olb_port)
++        ovs_network_br = self.get_ovs_network_br(ovs_link['right_ovs_id'])
++        ovs_network_br.delete_port(olo_port)
++        self.bridge.delete_port(olb_port)
++        ip_link_device = ip_lib.IPDevice(olb_port, root_helper=self.root_helper)
++        ip_link_device.link.delete()
++       
++        #delete flows       
++        self.bridge.delete_flows(table='0', in_port=olb_ofport)
++        self.bridge.delete_flows(table='1', tun_id=ovs_link['left_tunnel_id'])
++        LOG.info(_("Right endpoint of ovs link %s is deleted successfully.\n"), ovs_link)
++  
++    def get_vm_link_ovs_endpoint_pair_names(self, id):
++        return (("vlo%s" % id)[:self.NIC_NAME_LEN],
++                ("vlb%s" % id)[:self.NIC_NAME_LEN])
++
++    #def get_vm_link_vm_endpoint_ovs_port_name(self, id):
++    #    return ("qvo%s" % id)[:self.NIC_NAME_LEN]
++
++    def vm_link_ovs_endpoint_created(self, context, vm_link):
++        vlo_port,vlb_port  = self.get_vm_link_ovs_endpoint_pair_names(vm_link['ovs_port_id'])
++        self.create_veth_pair_ports(vlo_port, vlb_port)
++        ovs_network_br = self.get_ovs_network_br(vm_link['ovs_network_id'])
++        ovs_network_br.add_port(vlo_port)
++        self.bridge.add_port(vlb_port)
++
++        vlb_ofport = self.bridge.get_port_ofport(vlb_port)
++        self.bridge.add_flow(table='0', priority=10, in_port=vlb_ofport, actions='set_tunnel:%s,resubmit(,1)'%vm_link['ovs_tunnel_id'])
++        self.bridge.add_flow(table='1', priority=10, tun_id=vm_link['vm_tunnel_id'], actions='output:%s'%vlb_ofport)
++        LOG.info(_("OVS endpoint of vm link %s is created successfully.\n"), vm_link)
++
++    def vm_link_ovs_endpoint_deleted(self, context, vm_link):
++        vlo_port,vlb_port = self.get_vm_link_ovs_endpoint_pair_names(vm_link['ovs_port_id'])
++        vlb_ofport = self.bridge.get_port_ofport(vlb_port)
++        ovs_network_br = self.get_ovs_network_br(vm_link['ovs_network_id'])
++        ovs_network_br.delete_port(vlo_port)
++        self.bridge.delete_port(vlb_port)
++        ip_link_device = ip_lib.IPDevice(vlb_port, root_helper=self.root_helper)
++        ip_link_device.link.delete()
++       
++        #delete flows       
++        self.bridge.delete_flows(table='0', in_port=vlb_ofport)
++        self.bridge.delete_flows(table='1', tun_id=vm_link['vm_tunnel_id'])
++        LOG.info(_("OVS endpoint of vm link %s is deleted successfully.\n"), vm_link)
++
++    def vm_link_vm_endpoint_created(self, context, vm_link):
++        vlb_ofport = vm_link['vm_ofport']
++        self.bridge.add_flow(table='0', priority=10, in_port=vlb_ofport, actions='set_tunnel:%s,resubmit(,1)'%vm_link['vm_tunnel_id'])
++        self.bridge.add_flow(table='1', priority=10, tun_id=vm_link['ovs_tunnel_id'], actions='output:%s'%vlb_ofport)
++        LOG.info(_("VM endpoint of vm link %s is Created successfully.\n"), vm_link)
++
++    def vm_link_vm_endpoint_updated(self, context, vm_link):
++        vlb_ofport = vm_link['vm_ofport']
++        self.bridge.delete_flows(table='1', tun_id=vm_link['old_ovs_tunnel_id'])
++        self.bridge.add_flow(table='1', tun_id=vm_link['ovs_tunnel_id'], actions='output:%s'%vlb_ofport)
++        LOG.info(_("VM endpoint of vm link %s is updated successfully.\n"), vm_link)
++
++    def vm_link_vm_endpoint_deleted(self, context, vm_link):
++        vlb_ofport = vm_link['vm_ofport']
++        self.bridge.delete_flows(table='0', in_port=vlb_ofport)
++        self.bridge.delete_flow(table='1', tun_id=vm_link['ovs_tunnel_id'])
++        LOG.info(_("VM endpoint of vm link %s is updated successfully.\n"), vm_link)
+diff --git a/neutron/agent/ovsnetwork_rpc_agent.py b/neutron/agent/ovsnetwork_rpc_agent.py
+new file mode 100644
+index 0000000..3b5ddf2
+--- /dev/null
++++ b/neutron/agent/ovsnetwork_rpc_agent.py
+@@ -0,0 +1,415 @@
++# vim: tabstop=4 shiftwidth=4 softtabstop=4
++#
++# Copyright 2012, Nachi Ueno, NTT MCL, Inc.
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++#
++# This is created by Jian LI @ BUPT
++
++from oslo.config import cfg
++
++from neutron.common import topics
++from neutron.openstack.common import importutils
++from neutron.openstack.common import log as logging
++from neutron import manager
++
++#from neutron.agent.linux import ovs_lib
++
++LOG = logging.getLogger(__name__)
++
++ovs_network_opts = [
++    cfg.StrOpt(
++        'ovs_network_driver',
++        default='neutron.agent.linux.ovsnetwork.OVSNetworkDriver',
++        help=_('Driver for ovs network implementation on L2 agent')),
++]
++cfg.CONF.register_opts(ovs_network_opts, 'OVSNETWORK')
++
++OVS_NETWORK_RPC_VERSION = "1.0"
++
++OVS_NETWORK = 'ovs_network'
++OVS_LINK = 'ovs_link'
++VM_LINK = 'vm_link'
++class OVSNetworkAgentRpcApiMixin(object): 
++    """A mix-in class supporting plugins to send message to the ovsnetwork agent."""
++
++    def _get_ovs_network_create_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     OVS_NETWORK,                                     
++                                     topics.CREATE,
++                                     host)
++    
++    def _get_ovs_network_update_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     OVS_NETWORK,                                     
++                                     topics.UPDATE,
++                                     host)                                
++                                     
++    def _get_ovs_network_delete_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     OVS_NETWORK,                                     
++                                     topics.DELETE,
++                                     host)
++
++    def _get_ovs_link_create_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     OVS_LINK,                                     
++                                     topics.CREATE,
++                                     host)
++
++    def _get_ovs_link_delete_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     OVS_LINK,                                     
++                                     topics.DELETE,
++                                     host)
++
++    def _get_vm_link_create_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     VM_LINK,                                     
++                                     topics.CREATE,
++                                     host)
++
++    def _get_vm_link_update_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     VM_LINK,                                     
++                                     topics.UPDATE,
++                                     host)
++
++    def _get_vm_link_delete_topic(self, host=None):
++        return topics.get_topic_name(self.topic,
++                                     VM_LINK,                                     
++                                     topics.DELETE,
++                                     host)
++                                     
++    def ovs_network_created(self, context, ovs_network):
++        if not ovs_network:
++            return
++        self.cast(context,
++            self.make_msg('ovs_network_created',ovs_network=ovs_network),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_ovs_network_create_topic(ovs_network['host']))
++        
++    def ovs_network_updated(self, context, ovs_network):
++        if not id or not ovs_network:
++            return
++        self.cast(context,
++             self.make_msg('ovs_network_updated', ovs_network=ovs_network),
++             version=OVS_NETWORK_RPC_VERSION,
++             topic=self._get_ovs_network_update_topic(ovs_network['host']))
++    
++    def ovs_network_deleted(self, context, id, host):
++        if not id:
++            return
++        self.cast(context,
++             self.make_msg('ovs_network_deleted', id=id),
++             version=OVS_NETWORK_RPC_VERSION,
++             topic=self._get_ovs_network_delete_topic(host))
++
++    def ovs_link_left_endpoint_created(self, context, ovs_link, host):
++        if not ovs_link:
++            return
++        self.cast(context,
++            self.make_msg('ovs_link_left_endpoint_created', ovs_link=ovs_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_ovs_link_create_topic(host))
++
++    def ovs_link_right_endpoint_created(self, context, ovs_link, host):
++        if not ovs_link:
++            return
++        self.cast(context,
++            self.make_msg('ovs_link_right_endpoint_created', ovs_link=ovs_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_ovs_link_create_topic(host))
++
++    def ovs_link_left_endpoint_deleted(self, context, ovs_link, host):
++        if not ovs_link:
++            return
++        self.cast(context,
++            self.make_msg('ovs_link_left_endpoint_deleted', ovs_link=ovs_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_ovs_link_delete_topic(host))
++
++    def ovs_link_right_endpoint_deleted(self, context, ovs_link, host):
++        if not ovs_link:
++            return
++        self.cast(context,
++            self.make_msg('ovs_link_right_endpoint_deleted', ovs_link=ovs_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_ovs_link_create_topic(host))
++
++    def vm_link_vm_endpoint_created(self, context, vm_link, host):
++        if not vm_link:
++            return
++        self.cast(context,
++            self.make_msg('vm_link_vm_endpoint_created', vm_link=vm_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_vm_link_create_topic(host))
++
++    def vm_link_vm_endpoint_updated(self, context, vm_link, host):
++        if not vm_link:
++            return
++        self.cast(context,
++            self.make_msg('vm_link_vm_endpoint_updated', vm_link=vm_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_vm_link_update_topic(host))
++
++    def vm_link_vm_endpoint_deleted(self, context, vm_link, host):
++        if not vm_link:
++            return
++        self.cast(context,
++            self.make_msg('vm_link_vm_endpoint_deleted', vm_link=vm_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_vm_link_delete_topic(host))
++
++    def vm_link_ovs_endpoint_created(self, context, vm_link, host):
++        if not vm_link:
++            return
++        self.cast(context,
++            self.make_msg('vm_link_ovs_endpoint_created', vm_link=vm_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_vm_link_create_topic(host))
++
++    def vm_link_ovs_endpoint_deleted(self, context, vm_link, host):
++        if not vm_link:
++            return
++        self.cast(context,
++            self.make_msg('vm_link_ovs_endpoint_deleted', vm_link=vm_link),
++            version=OVS_NETWORK_RPC_VERSION,
++            topic=self._get_vm_link_delete_topic(host))
++                                                
++                         
++class OVSNetworkAgentRpcCallbackMixin(object):
++    """A mix-in that enable ovs agent to call ovs network agent."""
++    
++    ovs_network_agent = None
++    def _ovs_network_agent_not_set(self):
++        LOG.warning(_("ovs network agent binding currently not set. "
++                      "This should be set by the end of the init "
++                      "process."))
++
++    def ovs_network_created(self, context, **kwargs):
++        """Callback for ovs network create.
++
++        :param ovs_network: new ovs network
++        """
++        ovs_network = kwargs.get('ovs_network', {})
++        LOG.debug(
++            _("ovs network %s created on remote: %s"), ovs_network, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_network_created(context, ovs_network)
++
++    def ovs_network_updated(self, context, **kwargs):
++        """Callback for ovs network update.
++
++        :param ovs_network: updated ovs network
++        """
++        ovs_network = kwargs.get('ovs_network', {})
++        LOG.debug(
++            _("ovs network %s updated on remote: %s"), ovs_network, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_network_updated(context, ovs_network)
++
++    def ovs_network_deleted(self, context, **kwargs):
++        """Callback for ovs network update.
++
++        :param id: ovs network's id
++        """
++        id = kwargs.get('id', None)
++        LOG.debug(
++            _("ovs network %s deleted on remote: %s"), id, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_network_deleted(context, id)
++
++    def ovs_link_left_endpoint_created(self, context, **kwargs):
++        """Callback for ovs link left endpoint create.
++
++        :param ovs_link: new ovs link 
++        """
++        ovs_link = kwargs.get('ovs_link', {})
++        LOG.debug(
++            _("ovs link %s left endpoint created on remote: %s"), ovs_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_link_left_endpoint_created(context, ovs_link)
++
++    def ovs_link_right_endpoint_created(self, context, **kwargs):
++        """Callback for ovs link right endpoint create.
++
++        :param ovs_link: new ovs link 
++        """
++        ovs_link = kwargs.get('ovs_link', {})
++        LOG.debug(
++            _("ovs link %s right endpoint created on remote: %s"), ovs_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_link_right_endpoint_created(context, ovs_link)
++
++    def ovs_link_left_endpoint_deleted(self, context, **kwargs):
++        """Callback for ovs link left endpoint delete.
++
++        :param ovs_link: ovs link 
++        """
++        ovs_link = kwargs.get('ovs_link', {})
++        LOG.debug(
++            _("ovs link %s left endpoint deleted on remote: %s"), ovs_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_link_left_endpoint_deleted(context, ovs_link)
++
++    def ovs_link_right_endpoint_deleted(self, context, **kwargs):
++        """Callback for ovs link right endpoint delete.
++
++        :param ovs_link: ovs link 
++        """
++        ovs_link = kwargs.get('ovs_link', {})
++        LOG.debug(
++            _("ovs link %s right endpoint deleted on remote: %s"), ovs_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.ovs_link_right_endpoint_deleted(context, ovs_link)
++
++    def vm_link_vm_endpoint_created(self, context, **kwargs):
++        """Callback for vm link vm endpoint create.
++
++        :param vm_link: vm link
++        """
++        vm_link = kwargs.get('vm_link', {})
++        LOG.debug(
++            _("vm link %s vm endpoint created on remote: %s"), vm_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.vm_link_vm_endpoint_created(context, vm_link)
++
++    def vm_link_vm_endpoint_updated(self, context, **kwargs):
++        """Callback for vm link vm endpoint update.
++
++        :param vm_link: vm link
++        """
++        vm_link = kwargs.get('vm_link', {})
++        LOG.debug(
++            _("vm link %s vm endpoint updated on remote: %s"), vm_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.vm_link_vm_endpoint_updated(context, vm_link)
++
++    def vm_link_vm_endpoint_deleted(self, context, **kwargs):
++        """Callback for vm link vm endpoint delete.
++
++        :param vm_link: vm link
++        """
++        vm_link = kwargs.get('vm_link', {})
++        LOG.debug(
++            _("vm link %s vm endpoint delete on remote: %s"), vm_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.vm_link_vm_endpoint_deleted(context, vm_link)
++
++    def vm_link_ovs_endpoint_created(self, context, **kwargs):
++        """Callback for vm link ovs endpoint create.
++
++        :param vm_link: vm link
++        """
++        vm_link = kwargs.get('vm_link', {})
++        LOG.debug(
++            _("vm link %s ovs endpoint created on remote: %s"), vm_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.vm_link_ovs_endpoint_created(context, vm_link)
++
++    def vm_link_ovs_endpoint_deleted(self, context, **kwargs):
++        """Callback for vm link ovs endpoint delete.
++
++        :param vm_link: vm link
++        """
++        vm_link = kwargs.get('vm_link', {})
++        LOG.debug(
++            _("vm link %s ovs endpoint deleted on remote: %s"), vm_link, cfg.CONF.host)
++        if not self.ovs_network_agent:
++            return self._ovs_network_agent_not_set()
++        self.ovs_network_agent.vm_link_ovs_endpoint_deleted(context, vm_link)
++ 
++    
++class OVSNetworkAgentRpcMixin(object):
++    """A mix-in that enable ovsnetwork agent support in agent implementations"""
++
++    def __init__(self):
++        self.ovs_network_driver = cfg.CONF.OVSNETWORK.ovs_network_driver
++        if self.ovs_network_driver:
++            LOG.debug(_("Loading ovs network driver %s"), self.ovs_network_driver)
++            self.ovs_network_driver = importutils.import_object(self.ovs_network_driver)
++        else:
++            LOG.debug(_("ovs network driver is not defined on %s!"), cfg.CONF.host)
++
++    def ovs_network_created(self, context, ovs_network):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_network_created(context, ovs_network)
++        LOG.info(_("Create ovs network %s by driver %s"), ovs_network, self.ovs_network_driver)
++
++    def ovs_network_updated(self, context, ovs_network):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_network_updated(context, ovs_network)
++        LOG.info(_("Update ovs network %s by driver %s"), ovs_network, self.ovs_network_driver)
++
++    def ovs_network_deleted(self, context, id):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_network_deleted(context, id)
++        LOG.info(_("Delete ovs network %s by driver %s"), id, self.ovs_network_driver)
++
++    def ovs_link_left_endpoint_created(self, context, ovs_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_link_left_endpoint_created(context, ovs_link)
++        LOG.info(_("Create left endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
++
++    def ovs_link_right_endpoint_created(self, context, ovs_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_link_right_endpoint_created(context, ovs_link)
++        LOG.info(_("Create right endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
++
++    def ovs_link_left_endpoint_deleted(self, context, ovs_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_link_left_endpoint_deleted(context, ovs_link)
++        LOG.info(_("Delete left endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
++
++    def ovs_link_right_endpoint_deleted(self, context, ovs_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.ovs_link_right_endpoint_deleted(context, ovs_link)
++        LOG.info(_("Delete right endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
++
++    def vm_link_vm_endpoint_created(self, context, vm_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.vm_link_vm_endpoint_created(context, vm_link)
++        LOG.info(_("Create vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
++
++    def vm_link_vm_endpoint_updated(self, context, vm_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.vm_link_vm_endpoint_updated(context, vm_link)
++        LOG.info(_("Update vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
++
++    def vm_link_vm_endpoint_deleted(self, context, vm_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.vm_link_vm_endpoint_deleted(context, vm_link)
++        LOG.info(_("Delete vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
++
++    def vm_link_ovs_endpoint_created(self, context, vm_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.vm_link_ovs_endpoint_created(context, vm_link)
++        LOG.info(_("Create ovs endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
++
++    def vm_link_ovs_endpoint_deleted(self, context, vm_link):
++        if self.ovs_network_driver:
++            self.ovs_network_driver.vm_link_ovs_endpoint_deleted(context, vm_link)
++        LOG.info(_("Delete ovs endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
+diff --git a/neutron/db/migration/alembic_migrations/versions/678dd7887ab_support_ovsnetwork_extension.py b/neutron/db/migration/alembic_migrations/versions/678dd7887ab_support_ovsnetwork_extension.py
+new file mode 100644
+index 0000000..287383c
+--- /dev/null
++++ b/neutron/db/migration/alembic_migrations/versions/678dd7887ab_support_ovsnetwork_extension.py
+@@ -0,0 +1,109 @@
++# Copyright 2014 OpenStack Foundation
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++#
++
++"""Support ovsnetwork extension! 
++
++Revision ID: 678dd7887ab
++Revises: icehouse
++Create Date: 2014-11-23 13:50:10.185289
++
++"""
++
++# revision identifiers, used by Alembic.
++revision = '678dd7887ab'
++down_revision = 'icehouse'
++
++# Change to ['*'] if this migration applies to all plugins
++
++migration_for_plugins = [
++    'neutron.plugins.ml2.plugin.Ml2Plugin'
++]
++
++from alembic import op
++import sqlalchemy as sa
++from sqlalchemy.dialects import mysql
++
++from neutron.db import migration
++
++### added by Jian LI to support ovsnetwork extension ###
++
++def upgrade(active_plugins=None, options=None):
++    if not migration.should_run(active_plugins, migration_for_plugins):
++        return
++
++    op.create_table('ovsnetworks',
++    sa.Column('tenant_id', sa.String(length=255), nullable=True),
++    sa.Column('id', sa.String(length=36), nullable=False),
++    sa.Column('name', sa.String(length=255), nullable=True),
++    sa.Column('host', sa.String(length=255), nullable=True),
++    sa.Column('controller_ipv4_address', sa.String(length=36), nullable=True),
++    sa.Column('controller_port_num', sa.Integer(), nullable=True),
++    sa.PrimaryKeyConstraint('id'),
++    mysql_default_charset=u'utf8',
++    mysql_engine=u'InnoDB'
++    )
++
++    op.create_table('vmlinks',
++    sa.Column('tenant_id', sa.String(length=255), nullable=True),
++    sa.Column('id', sa.String(length=36), nullable=False),
++    sa.Column('name', sa.String(length=255), nullable=True),
++    sa.Column('vm_port_id', sa.String(length=36), nullable=False),
++    sa.Column('vm_ofport', sa.Integer(), nullable=True),
++    sa.Column('vm_host', sa.String(length=255), nullable=True),
++    sa.Column('status', sa.String(length=16), nullable=False),
++    sa.Column('ovs_port_id', sa.String(length=36), nullable=False),
++    sa.Column('ovs_network_id', sa.String(length=36), nullable=False),
++    sa.PrimaryKeyConstraint('id'),
++    mysql_default_charset=u'utf8',
++    mysql_engine=u'InnoDB'
++    )
++
++    op.create_table('ovslinks',
++    sa.Column('tenant_id', sa.String(length=255), nullable=True),
++    sa.Column('id', sa.String(length=36), nullable=False),
++    sa.Column('name', sa.String(length=255), nullable=True),
++    sa.Column('left_port_id', sa.String(length=36), nullable=False),
++    sa.Column('right_port_id', sa.String(length=36), nullable=False),
++    sa.Column('left_ovs_id', sa.String(length=36), nullable=False),
++    sa.Column('right_ovs_id', sa.String(length=36), nullable=False),
++    sa.PrimaryKeyConstraint('id'),
++    mysql_default_charset=u'utf8',
++    mysql_engine=u'InnoDB'
++    )
++
++    op.create_table('tunnelkeylasts',
++    sa.Column('last_key', sa.Integer(), nullable=True),
++    sa.PrimaryKeyConstraint('last_key'),
++    mysql_default_charset=u'utf8',
++    mysql_engine=u'InnoDB'
++    )
++
++    op.create_table('tunnelkeys',
++    sa.Column('tunnel_key', sa.Integer(), nullable=True, autoincrement=False),
++    sa.Column('port_id', sa.String(length=36), nullable=False),
++    sa.PrimaryKeyConstraint('tunnel_key'),
++    mysql_default_charset=u'utf8',
++    mysql_engine=u'InnoDB'
++    )
++
++def downgrade(active_plugins=None, options=None):
++    if not migration.should_run(active_plugins, migration_for_plugins):
++        return
++
++    op.drop_table('ovsnetworks')
++    op.drop_table('vmlinks')
++    op.drop_table('ovslinks')
++    op.drop_table('tunnelkeylasts')
++    op.drop_table('tunnelkeys')
+diff --git a/neutron/db/migration/alembic_migrations/versions/HEAD b/neutron/db/migration/alembic_migrations/versions/HEAD
+index 762682d..8d69cf2 100644
+--- a/neutron/db/migration/alembic_migrations/versions/HEAD
++++ b/neutron/db/migration/alembic_migrations/versions/HEAD
+@@ -1 +1 @@
+-icehouse
++678dd7887ab
+\ No newline at end of file
+diff --git a/neutron/db/ovsnetwork_db.py b/neutron/db/ovsnetwork_db.py
+new file mode 100644
+index 0000000..0b396ff
+--- /dev/null
++++ b/neutron/db/ovsnetwork_db.py
+@@ -0,0 +1,510 @@
++# vim: tabstop=4 shiftwidth=4 softtabstop=4
++
++# Copyright 2012 Nicira Networks, Inc.  All rights reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++#
++# @author: Jian LI, BUPT
++# Tunnelkey is copied from ryu plugin in icehouse release
++
++import sqlalchemy as sa
++from sqlalchemy import orm
++from sqlalchemy.orm import exc
++from sqlalchemy import UniqueConstraint
++
++from sqlalchemy import func
++from sqlalchemy import exc as sa_exc
++
++from neutron.api.v2 import attributes as attr
++from neutron.db import db_base_plugin_v2
++from neutron.db import portbindings_db
++from neutron.db import model_base
++from neutron.db import models_v2
++
++from neutron.extensions import ovsnetwork as ext_ovsnetwork
++from neutron.openstack.common import uuidutils
++from neutron.openstack.common import log as logging
++from neutron.common import exceptions as n_exc
++from oslo.config import cfg
++
++
++
++
++LOG = logging.getLogger(__name__)
++
++
++class TunnelKeyLast(model_base.BASEV2):
++    """Last allocated Tunnel key.
++
++    The next key allocation will be started from this value + 1
++    """
++    last_key = sa.Column(sa.Integer, primary_key=True)
++
++    def __repr__(self):
++        return "<TunnelKeyLast(%x)>" % self.last_key
++
++
++class TunnelKey(model_base.BASEV2):
++    """Port ID <-> tunnel key mapping."""
++    port_id = sa.Column(sa.String(36), sa.ForeignKey("ports.id"),
++                        nullable=False)
++    tunnel_key = sa.Column(sa.Integer, primary_key=True,
++                           nullable=False, autoincrement=False)
++
++    def __repr__(self):
++        return "<TunnelKey(%s,%x)>" % (self.port_id, self.tunnel_key)
++
++
++class OVSNetwork(model_base.BASEV2, models_v2.HasTenant):
++    id = sa.Column(sa.String(36), 
++                   sa.ForeignKey("networks.id", ondelete='CASCADE'),
++                   primary_key=True)
++    name = sa.Column(sa.String(255))
++    host = sa.Column(sa.String(255), nullable=True)
++    controller_ipv4_address = sa.Column(sa.String(36))
++    controller_port_num = sa.Column(sa.Integer) 
++    __table_args__ = (
++        UniqueConstraint("name", "tenant_id"),
++    )
++
++
++class VMLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
++    name = sa.Column(sa.String(255))
++    vm_port_id = sa.Column(sa.String(36), sa.ForeignKey("ports.id", ondelete='CASCADE'))
++    vm_ofport = sa.Column(sa.Integer, nullable=True)
++    status = sa.Column(sa.String(16), nullable=False)
++    vm_host = sa.Column(sa.String(255), nullable=True)
++    ovs_port_id = sa.Column(sa.String(36), sa.ForeignKey("ports.id", ondelete='CASCADE'))
++    ovs_network_id = sa.Column(sa.String(36), sa.ForeignKey("ovsnetworks.id", ondelete='CASCADE'))
++    __table_args__ = (
++        UniqueConstraint("name", "tenant_id"),
++    )
++
++
++class OVSLink(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
++    name = sa.Column(sa.String(255))
++    left_port_id = sa.Column(sa.String(36),
++                             sa.ForeignKey("ports.id", ondelete='CASCADE'))
++    right_port_id = sa.Column(sa.String(36),
++                              sa.ForeignKey("ports.id", ondelete='CASCADE'))
++    left_ovs_id = sa.Column(sa.String(36),
++                            sa.ForeignKey('ovsnetworks.id', ondelete='CASCADE'))
++    right_ovs_id = sa.Column(sa.String(36),
++                            sa.ForeignKey('ovsnetworks.id', ondelete='CASCADE'))
++    __table_args__ = (
++        UniqueConstraint("name", "tenant_id"),
++    )
++
++
++class TunnelKeyDbMixin(object):
++    # VLAN: 12 bits
++    # GRE, VXLAN: 24bits
++    # TODO(yamahata): STT: 64bits
++    _KEY_MIN_HARD = 1
++    _KEY_MAX_HARD = 0xffffffff
++
++    def __init__(self, key_min=_KEY_MIN_HARD, key_max=_KEY_MAX_HARD):
++        self.key_min = key_min
++        self.key_max = key_max
++
++        if (key_min < self._KEY_MIN_HARD or key_max > self._KEY_MAX_HARD or
++                key_min > key_max):
++            raise ValueError(_('Invalid tunnel key options '
++                               'tunnel_key_min: %(key_min)d '
++                               'tunnel_key_max: %(key_max)d. '
++                               'Using default value') % {'key_min': key_min,
++                                                         'key_max': key_max})
++
++    def _last_key(self, session):
++        try:
++            return session.query(TunnelKeyLast).one()
++        except exc.MultipleResultsFound:
++            max_key = session.query(
++                func.max(TunnelKeyLast.last_key))
++            if max_key > self.key_max:
++                max_key = self.key_min
++
++            session.query(TunnelKeyLast).delete()
++            last_key = TunnelKeyLast(last_key=max_key)
++        except exc.NoResultFound:
++            last_key = TunnelKeyLast(last_key=self.key_min)
++
++        session.add(last_key)
++        session.flush()
++        return session.query(TunnelKeyLast).one()
++
++    def _find_key(self, session, last_key):
++        """Try to find unused tunnel key.
++        Trying to find unused tunnel key in TunnelKey table starting
++        from last_key + 1.
++        When all keys are used, raise sqlalchemy.orm.exc.NoResultFound
++        """
++        # key 0 is used for special meanings. So don't allocate 0.
++
++        # sqlite doesn't support
++        # '(select order by limit) union all (select order by limit) '
++        # 'order by limit'
++        # So do it manually
++        # new_key = session.query("new_key").from_statement(
++        #     # If last_key + 1 isn't used, it's the result
++        #     'SELECT new_key '
++        #     'FROM (SELECT :last_key + 1 AS new_key) q1 '
++        #     'WHERE NOT EXISTS '
++        #     '(SELECT 1 FROM tunnelkeys WHERE tunnel_key = :last_key + 1) '
++        #
++        #     'UNION ALL '
++        #
++        #     # if last_key + 1 used,
++        #     # find the least unused key from last_key + 1
++        #     '(SELECT t.tunnel_key + 1 AS new_key '
++        #     'FROM tunnelkeys t '
++        #     'WHERE NOT EXISTS '
++        #     '(SELECT 1 FROM tunnelkeys ti '
++        #     ' WHERE ti.tunnel_key = t.tunnel_key + 1) '
++        #     'AND t.tunnel_key >= :last_key '
++        #     'ORDER BY new_key LIMIT 1) '
++        #
++        #     'ORDER BY new_key LIMIT 1'
++        # ).params(last_key=last_key).one()
++        try:
++            new_key = session.query("new_key").from_statement(
++                # If last_key + 1 isn't used, it's the result
++                'SELECT new_key '
++                'FROM (SELECT :last_key + 1 AS new_key) q1 '
++                'WHERE NOT EXISTS '
++                '(SELECT 1 FROM tunnelkeys WHERE tunnel_key = :last_key + 1) '
++            ).params(last_key=last_key).one()
++        except exc.NoResultFound:
++            new_key = session.query("new_key").from_statement(
++                # if last_key + 1 used,
++                # find the least unused key from last_key + 1
++                '(SELECT t.tunnel_key + 1 AS new_key '
++                'FROM tunnelkeys t '
++                'WHERE NOT EXISTS '
++                '(SELECT 1 FROM tunnelkeys ti '
++                ' WHERE ti.tunnel_key = t.tunnel_key + 1) '
++                'AND t.tunnel_key >= :last_key '
++                'ORDER BY new_key LIMIT 1) '
++            ).params(last_key=last_key).one()
++
++        new_key = new_key[0]  # the result is tuple.
++        LOG.debug(_("last_key %(last_key)s new_key %(new_key)s"),
++                  {'last_key': last_key, 'new_key': new_key})
++        if new_key > self.key_max:
++            LOG.debug(_("No key found"))
++            raise exc.NoResultFound()
++        return new_key
++
++    def _allocate(self, session, port_id):
++        last_key = self._last_key(session)
++        try:
++            new_key = self._find_key(session, last_key.last_key)
++        except exc.NoResultFound:
++            new_key = self._find_key(session, self.key_min)
++
++        tunnel_key = TunnelKey(port_id=port_id,
++                               tunnel_key=new_key)
++        last_key.last_key = new_key
++        session.add(tunnel_key)
++        return new_key
++
++    _TRANSACTION_RETRY_MAX = 16
++
++    def allocate(self, session, port_id):
++        count = 0
++        while True:
++            session.begin(subtransactions=True)
++            try:
++                new_key = self._allocate(session, port_id)
++                session.commit()
++                break
++            except sa_exc.SQLAlchemyError:
++                session.rollback()
++
++            count += 1
++            if count > self._TRANSACTION_RETRY_MAX:
++                # if this happens too often, increase _TRANSACTION_RETRY_MAX
++                LOG.warn(_("Transaction retry exhausted (%d). "
++                           "Abandoned tunnel key allocation."), count)
++                raise n_exc.ResourceExhausted()
++
++        return new_key
++
++    def delete(self, session, port_id):
++        session.query(TunnelKey).filter_by(
++            port_id=port_id).delete()
++        session.flush()
++
++    def get(self, session, port_id):
++        return session.query(TunnelKey).filter_by(
++            port_id=port_id).one().tunnel_key
++
++
++class OVSNetworkDbMixin(ext_ovsnetwork.OVSNetworkPluginBase):
++    """Mixin class to add ovs network extension to db_plugin_base_v2."""
++
++
++    def _make_ovs_network_dict(self, ovs_network, fields=None):
++        res = {'id': ovs_network['id'],
++               'tenant_id': ovs_network['tenant_id'],
++               'name': ovs_network['name'],
++               'host': ovs_network['host'],
++               'controller_ipv4_address': ovs_network['controller_ipv4_address'],
++               'controller_port_num': ovs_network.get('controller_port_num', None),
++               #'tunnel_key':ovsnetwork.get('tunnel_key',None)
++              }       
++        return self._fields(res, fields)        
++
++    def _get_ovs_network(self, context, id):
++        try:
++            query = self._model_query(context, OVSNetwork)
++            ovs_network = query.filter(OVSNetwork.id == id).one()
++
++        except exc.NoResultFound:
++            raise ext_ovsnetwork.OVSNetworkNotFound(id=id)
++        return ovs_network
++
++    def get_ovs_network(self, context, id, fields=None):
++        with context.session.begin(subtransactions=True):
++            ovs_network = self._get_ovs_network(context, id)
++            if ovs_network != None:
++                ret = self._make_ovs_network_dict(ovs_network, fields)            
++                return ret 
++
++    def get_ovs_networks(self, context, filters=None, fields=None,
++                        sorts=None, limit=None, marker=None,
++                        page_reverse=False):
++        marker_obj = self._get_marker_obj(context, 'ovs_network',
++                                          limit, marker)
++        return self._get_collection(context,
++                                    OVSNetwork,
++                                    self._make_ovs_network_dict,
++                                    filters=filters, fields=fields,
++                                    sorts=sorts,
++                                    limit=limit, marker_obj=marker_obj,
++                                    page_reverse=page_reverse)
++
++    def create_ovs_network(self, context, ovs_network):
++        ovs_network = ovs_network['ovs_network']
++        id = ovs_network.get('id')
++        tenant_id = self._get_tenant_id_for_create(context, ovs_network)
++        name = ovs_network.get('name', None)
++        host = ovs_network.get('host', None)
++        controller_ipv4_address = ovs_network.get('controller_ipv4_address', None)
++        controller_port_num = ovs_network.get('controller_port_num', None)
++        with context.session.begin(subtransactions=True):
++            ovs_network_db = OVSNetwork(id = id,
++                                        tenant_id = tenant_id,
++                                        name = name,
++                                        host = host,
++                                        controller_ipv4_address = controller_ipv4_address,
++                                        controller_port_num = controller_port_num)
++            context.session.add(ovs_network_db)
++        return self._make_ovs_network_dict(ovs_network_db)
++    
++    def update_ovs_network(self, context, id, ovs_network):
++        with context.session.begin(subtransactions=True):
++            ovs_network_db = self._get_ovs_network(context, id)
++            if not ovs_network_db:
++                return None
++            ovs_network_db.update(ovs_network['ovs_network'])
++        return self._make_ovs_network_dict(ovs_network_db) 
++
++    def delete_ovs_network(self, context, id):
++        filters = {'ovs_network_id': [id]}
++        vmlinks = self.get_vm_links(context, filters)
++        ovslinks = self.get_ovs_links(context, filters)
++        if vmlinks or ovslinks:
++            raise ext_ovsnetwork.OVSNetworkHasLinks(id=id)
++        ovs_network = self._get_ovs_network(context, id)
++        host = ovs_network['host']
++
++        with context.session.begin(subtransactions=True):
++            context.session.delete(ovs_network)
++        return host
++
++    def _make_vm_link_dict(self, vm_link, fields=None):
++        res = {'id': vm_link['id'],
++               'tenant_id': vm_link['tenant_id'],
++               'name': vm_link['name'],
++               'vm_host': vm_link['vm_host'],
++               'vm_port_id': vm_link['vm_port_id'],
++               'vm_ofport':vm_link.get('vm_ofport'),
++               'ovs_port_id': vm_link['ovs_port_id'],
++               'ovs_network_id': vm_link['ovs_network_id'],
++               'status':vm_link['status'],
++              }
++        return self._fields(res, fields)        
++
++    def _get_vm_link(self, context, id):
++        try:
++            query = self._model_query(context, VMLink)
++            vm_link = query.filter(VMLink.id == id).one()
++
++        except exc.NoResultFound:
++            return None
++        return vm_link
++    
++    def _get_ovs_network_id_by_name(self, context, name):
++        try:
++            query = self._model_query(context, OVSNetwork)
++            ovs_network = query.filter(OVSNetwork.name == name).one()
++        except exc.NoResultFound:
++            raise ext_ovsnetwork.OVSNetworkNotFound(id=name)
++        return ovs_network['id']
++
++    def _get_ovs_network_host_by_id(self, context, id):
++        try:
++            query = self._model_query(context, OVSNetwork)
++            ovs_network = query.filter(OVSNetwork.id == id).one()
++        except exc.NoResultFound:
++            raise ext_ovsnetwork.OVSNetworkNotFound(id=id)
++        return ovs_network['host']
++
++    def get_vm_link(self, context, id, fields=None):
++        with context.session.begin(subtransactions=True):
++            vm_link = self._get_vm_link(context, id)
++            if vm_link != None:
++                ret = self._make_vm_link_dict(vm_link, fields)            
++                return ret 
++            else:
++                raise ext_ovsnetwork.VMLinkNotFound(id=id)                    
++
++    def get_vm_links(self, context, filters=None, fields=None,
++                     sorts=None, limit=None, marker=None,
++                     page_reverse=False):
++        marker_obj = self._get_marker_obj(context, 'vm_link',
++                                          limit, marker)
++        return self._get_collection(context,
++                                    VMLink,
++                                    self._make_vm_link_dict,
++                                    filters=filters, fields=fields,
++                                    sorts=sorts,
++                                    limit=limit, marker_obj=marker_obj,
++                                    page_reverse=page_reverse)
++
++    def create_vm_link(self, context, vm_link):
++        vm_link = vm_link['vm_link']
++        tenant_id = self._get_tenant_id_for_create(context, vm_link)
++        name = vm_link.get('name', None)
++        vm_host = vm_link.get('vm_host')
++        vm_port_id = vm_link['vm_port_id']
++        vm_ofport = vm_link.get('vm_ofport')
++        ovs_port_id = vm_link['ovs_port_id']
++        ovs_network_id = vm_link.get('ovs_network_id')
++        status = vm_link.get('status', 'PENDING')
++        if not attr.is_attr_set(ovs_network_id):
++            raise ext_ovsnetwork.OVSNetworkNotFound()
++        with context.session.begin(subtransactions=True):
++            vm_link_db = VMLink(id = uuidutils.generate_uuid(),
++                                tenant_id = tenant_id,
++                                name = name,
++                                vm_port_id = vm_port_id,
++                                vm_ofport = vm_ofport,
++                                vm_host = vm_host,
++                                ovs_port_id = ovs_port_id,
++                                ovs_network_id = ovs_network_id,
++                                status = status)
++            context.session.add(vm_link_db)
++        return self._make_vm_link_dict(vm_link_db)
++    
++    def update_vm_link(self, context, id, vm_link):
++        vm_link = vm_link['vm_link']
++        with context.session.begin(subtransactions=True):
++            vm_link_db = self._get_vm_link(context, id)
++            if not vm_link_db:
++                return None
++            vm_link_db.update(vm_link)
++        return self._make_vm_link_dict(vm_link_db) 
++
++    def delete_vm_link(self, context, id):
++        vm_link = self._get_vm_link(context, id)
++        with context.session.begin(subtransactions=True):
++            context.session.delete(vm_link)
++        return self._make_vm_link_dict(vm_link)
++
++
++    #ovs_link operation
++    def _make_ovs_link_dict(self, ovs_link, fields=None):
++        res = {'id': ovs_link['id'],
++               'tenant_id': ovs_link['tenant_id'],
++               'name': ovs_link['name'],
++               'left_port_id': ovs_link['left_port_id'],
++               'left_ovs_id': ovs_link['left_ovs_id'],
++               'right_port_id': ovs_link['right_port_id'],
++               'right_ovs_id': ovs_link['right_ovs_id']
++              }       
++        return self._fields(res, fields)        
++
++    def _get_ovs_link(self, context, id):
++        try:
++            query = self._model_query(context, OVSLink)
++            ovs_link = query.filter(OVSLink.id == id).one()
++
++        except exc.NoResultFound:
++            return None
++        return ovs_link
++   
++    def get_ovs_link(self, context, id, fields=None):
++        with context.session.begin(subtransactions=True):
++            ovs_link = self._get_ovs_link(context, id)
++            if ovs_link != None:
++                ret = self._make_ovs_link_dict(ovs_link, fields)            
++                return ret 
++            else:
++                raise ext_ovsnetwork.OVSLinkNotFound(id=id)                    
++
++    def get_ovs_links(self, context, filters=None, fields=None,
++                      sorts=None, limit=None, marker=None,
++                      page_reverse=False):
++        marker_obj = self._get_marker_obj(context, 'ovs_link',
++                                          limit, marker)
++        return self._get_collection(context,
++                                    OVSLink,
++                                    self._make_ovs_link_dict,
++                                    filters=filters, fields=fields,
++                                    sorts=sorts,
++                                    limit=limit, marker_obj=marker_obj,
++                                    page_reverse=page_reverse)
++
++    def create_ovs_link(self, context, ovs_link):
++        ovs_link = ovs_link['ovs_link']
++        id = ovs_link.get('id')
++        tenant_id = self._get_tenant_id_for_create(context, ovs_link)
++        name = ovs_link.get('name', None)
++        left_ovs_id = ovs_link.get('left_ovs_id')
++        right_ovs_id = ovs_link.get('right_ovs_id')
++        left_port_id = ovs_link.get('left_port_id')
++        right_port_id = ovs_link.get('right_port_id')
++        with context.session.begin(subtransactions=True):
++            ovs_link_db = OVSLink(id = id,
++                                  tenant_id = tenant_id,
++                                  name = name,
++                                  left_port_id = left_port_id,
++                                  left_ovs_id = left_ovs_id,
++                                  right_port_id = right_port_id,
++                                  right_ovs_id = right_ovs_id)
++            context.session.add(ovs_link_db)
++        return self._make_ovs_link_dict(ovs_link_db)
++
++    #def update_ovs_link(self, context, id, ovs_link):
++    #    # should we support ovs link update? This should be considered in future! lijian
++    #    self.delete_ovs_link(context, id)
++    #    ovs_link['ovs_link']['id'] = id 
++    #    self.create_ovs_link(context, ovs_link)
++    
++    def delete_ovs_link(self, context, id):
++        ovs_link = self._get_ovs_link(context, id)
++        with context.session.begin(subtransactions=True):
++            context.session.delete(ovs_link)
++        return self._make_ovs_link_dict(ovs_link)
+diff --git a/neutron/db/ovsnetwork_rpc_base.py b/neutron/db/ovsnetwork_rpc_base.py
+new file mode 100644
+index 0000000..5c12e35
+--- /dev/null
++++ b/neutron/db/ovsnetwork_rpc_base.py
+@@ -0,0 +1,242 @@
++# vim: tabstop=4 shiftwidth=4 softtabstop=4
++#
++# Copyright 2012, Nachi Ueno, NTT MCL, Inc.
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++import netaddr
++from oslo.config import cfg
++from neutron.common import constants as q_const
++from neutron.common import utils
++from neutron.db import ovsnetwork_db
++from neutron.openstack.common import log as logging
++from neutron.api.v2 import attributes
++
++LOG = logging.getLogger(__name__)
++
++ovs_network_opts = [
++    cfg.IntOpt(
++        'tunnel_key_min',
++        default=1,
++        help=_('Min tunnek key for ovs network isolation stategy.')),
++    cfg.IntOpt(
++        'tunnel_key_max',
++        default=0xffffffff,
++        help=_('Max tunnek key for ovs network isolation stategy.')),
++]
++cfg.CONF.register_opts(ovs_network_opts, 'OVSNETWORK')
++link_port={'port':{
++    'mac_address':attributes.ATTR_NOT_SPECIFIED,
++    'admin_state_up':True,
++    'fixed_ips':attributes.ATTR_NOT_SPECIFIED,
++    'device_id':'',
++    'device_owner':'',
++}}
++
++
++class OVSNetworkServerRpcMixin(ovsnetwork_db.OVSNetworkDbMixin):
++    
++    _tunnelkey = ovsnetwork_db.TunnelKeyDbMixin(
++        cfg.CONF.OVSNETWORK.tunnel_key_min, cfg.CONF.OVSNETWORK.tunnel_key_max)
++
++    @property
++    def tunnelkey(self):
++        return self._tunnelkey
++     
++    def create_ovs_network(self, context, ovs_network):
++        id = None
++        with context.session.begin(subtransactions=True):
++            network={}
++            network['network']={
++                'name':'shadow-ovs-network',
++                'admin_state_up':True,
++                'shared':False,
++                'status':'ACTIVE',
++            }
++            network = self.create_network(context, network)
++            id = network.get('id')
++            subnet={}
++            subnet['subnet']={
++                'cidr':'111.111.0.0/16',
++                'gateway_ip':'111.111.0.1',
++                'allocation_pools':attributes.ATTR_NOT_SPECIFIED,
++                'ip_version':4,
++                'dns_nameservers':attributes.ATTR_NOT_SPECIFIED,
++                'host_routes':attributes.ATTR_NOT_SPECIFIED,
++                'enable_dhcp':False,
++                'name':'shadow-ovs-subnet',
++                'network_id':id
++            }
++            subnet = self.create_subnet(context, subnet)
++            id = subnet.get('network_id')
++            ovs_network['ovs_network'].update({'id': id})
++            ovs_network = super(OVSNetworkServerRpcMixin, self).create_ovs_network(context, ovs_network)
++
++        if not id:
++            return
++        self.notifier.ovs_network_created(context, ovs_network)
++        return ovs_network
++
++    def update_ovs_network(self, context, id, ovs_network):
++        ovs_network = super(OVSNetworkServerRpcMixin, self).update_ovs_network(context, id, ovs_network)
++        if not ovs_network:
++            return
++        self.notifier.ovs_network_updated(context, ovs_network)
++        return ovs_network
++
++    def delete_ovs_network(self, context, id):
++        host = None
++        with context.session.begin(subtransactions=True):
++            host = super(OVSNetworkServerRpcMixin, self).delete_ovs_network(context, id)
++            filters = {'network_id': [id]}
++            subnets = self.get_subnets(context, filters)
++            for subnet in subnets:
++                self.delete_subnet(context, subnet['id'])
++            self.delete_network(context, id)
++
++        if not host:
++            return
++        self.notifier.ovs_network_deleted(context, id, host)
++        return id
++    
++    def create_ovs_link(self, context, ovs_link):
++        with context.session.begin(subtransactions=True):
++            left_port = link_port
++            left_port['port'].update({'name':'left-ovs-port',
++                                      'network_id':ovs_link['ovs_link']['left_ovs_id']})
++            left_port = self.create_port(context, left_port)
++            right_port = link_port
++            right_port['port'].update({'name':'right-ovs-port',
++                                      'network_id':ovs_link['ovs_link']['right_ovs_id']})
++            right_port = self.create_port(context, right_port)
++            ovs_link['ovs_link'].update({'left_port_id':left_port['id'],
++                                         'right_port_id':right_port['id']})
++            ovs_link = super(OVSNetworkServerRpcMixin, self).create_ovs_link(context, ovs_link)
++
++            ovs_link['left_tunnel_id'] = self.tunnelkey.allocate(context.session, ovs_link['left_port_id'])
++            ovs_link['right_tunnel_id'] = self.tunnelkey.allocate(context.session, ovs_link['right_port_id'])
++            left_host = self._get_ovs_network_host_by_id(context, ovs_link['left_ovs_id'])
++            right_host = self._get_ovs_network_host_by_id(context, ovs_link['right_ovs_id'])
++        
++        if not ovs_link.get('id'):
++            return
++        self.notifier.ovs_link_left_endpoint_created(context, ovs_link, left_host)
++        self.notifier.ovs_link_right_endpoint_created(context, ovs_link, right_host)
++        return ovs_link
++    
++    def delete_ovs_link(self, context, id):
++        ovs_link = None
++        with context.session.begin(subtransactions=True):
++            ovs_link = super(OVSNetworkServerRpcMixin, self).delete_ovs_link(context, id)
++            self.delete_port(context, ovs_link['left_port_id'])
++            self.delete_port(context, ovs_link['right_port_id'])
++
++            ovs_link['left_tunnel_id'] = self.tunnelkey.get(context.session, ovs_link['left_port_id'])
++            self.tunnelkey.delete(context.session, ovs_link['left_port_id'])
++            ovs_link['right_tunnel_id'] = self.tunnelkey.get(context.session, ovs_link['right_port_id'])
++            self.tunnelkey.delete(context.session, ovs_link['right_port_id'])
++
++            left_host = self._get_ovs_network_host_by_id(context, ovs_link['left_ovs_id'])
++            right_host = self._get_ovs_network_host_by_id(context, ovs_link['right_ovs_id'])
++
++        if not ovs_link.get('id'):
++            return
++        self.notifier.ovs_link_left_endpoint_deleted(context, ovs_link, left_host)
++        self.notifier.ovs_link_right_endpoint_deleted(context, ovs_link, right_host)
++    
++    def create_vm_link(self, context, vm_link):
++        with context.session.begin(subtransactions=True):
++            vm_port = link_port
++            vm_port['port'].update({'name':'vm_port',
++                                    'network_id':vm_link['vm_link']['ovs_network_id']})
++            vm_port = self.create_port(context, vm_port)
++            ovs_port = link_port
++            ovs_port['port'].update({'name':'ovs_port',
++                                     'network_id':vm_link['vm_link']['ovs_network_id']})
++            ovs_port = self.create_port(context, ovs_port)
++            vm_link['vm_link'].update({'vm_port_id':vm_port['id'],
++                                       'ovs_port_id':ovs_port['id']})
++            vm_link = super(OVSNetworkServerRpcMixin, self).create_vm_link(context, vm_link)
++
++            vm_link['vm_tunnel_id'] = self.tunnelkey.allocate(context.session, vm_link['vm_port_id'])
++            vm_link['ovs_tunnel_id'] = self.tunnelkey.allocate(context.session, vm_link['ovs_port_id'])
++            ovs_host = self._get_ovs_network_host_by_id(context, vm_link['ovs_network_id'])
++
++        if not vm_link.get('id'):
++            return
++        self.notifier.vm_link_ovs_endpoint_created(context, vm_link, ovs_host)
++        #self.notifier.vm_link_vm_endpoint_created(context, vm_link, vm_link['vm_host'])
++        return vm_link
++   
++    def update_vm_link(self, context, id, vm_link):
++        new_ovs_id = None
++        with context.session.begin(subtransactions=True):
++            new_ovs_id = vm_link['vm_link'].get('ovs_network_id')
++            new_status = vm_link['vm_link'].get('status')
++	    old_vm_link = super(OVSNetworkServerRpcMixin, self).get_vm_link(context, id)
++            old_ovs_id = old_vm_link['ovs_network_id']
++            old_status = old_vm_link['status']
++            if new_ovs_id and new_ovs_id != old_ovs_id:
++                self.delete_port(context, old_vm_link['ovs_port_id'])
++                ovs_port = link_port
++                ovs_port['port'].update({'name':'ovs_port',
++                                         'network_id':new_ovs_id})
++                ovs_port = self.create_port(context, ovs_port)
++                vm_link['vm_link'].update({'ovs_port_id':ovs_port['id']})
++                new_vm_link = super(OVSNetworkServerRpcMixin, self).update_vm_link(context, id, vm_link)
++                # when ovs endpoint changed, we should send notifications to the agent.
++                new_host = self._get_ovs_network_host_by_id(context, new_ovs_id)
++                old_host = self._get_ovs_network_host_by_id(context, old_vm_link['ovs_network_id'])
++                new_vm_link['ovs_tunnel_id'] = self.tunnelkey.allocate(context.session, new_vm_link['ovs_port_id'])
++                new_vm_link['vm_tunnel_id'] = self.tunnelkey.get(context.session, new_vm_link['vm_port_id'])
++                old_vm_link['ovs_tunnel_id'] = self.tunnelkey.get(context.session, old_vm_link['ovs_port_id'])
++                self.tunnelkey.delete(context.session, old_vm_link['ovs_port_id'])
++            else:
++                new_vm_link = super(OVSNetworkServerRpcMixin, self).update_vm_link(context, id, vm_link)
++                new_vm_link['ovs_tunnel_id'] = self.tunnelkey.get(context.session, new_vm_link['ovs_port_id'])
++                new_vm_link['vm_tunnel_id'] = self.tunnelkey.get(context.session, new_vm_link['vm_port_id'])
++
++        if new_ovs_id  and new_ovs_id != old_ovs_id:
++            # Delete old ovs endpoint of this vm link, and create the new one, then update the vm endpoint's flow table.
++            self.notifier.vm_link_ovs_endpoint_created(context, new_vm_link, new_host)
++            self.notifier.vm_link_ovs_endpoint_deleted(context, old_vm_link, old_host)
++        if new_status == 'ACTIVE':
++            if old_status == 'PENDING':
++                self.notifier.vm_link_vm_endpoint_created(context, new_vm_link, new_vm_link['vm_host'])
++            elif old_status == 'ACTIVE':
++                new_vm_link['old_ovs_tunnel_id'] = old_vm_link['ovs_tunnel_id']
++                self.notifier.vm_link_vm_endpoint_updated(context, new_vm_link, new_vm_link['vm_host'])
++        return new_vm_link
++   
++    def delete_vm_link(self, context, id):
++        vm_link = super(OVSNetworkServerRpcMixin, self).delete_vm_link(context, id)
++        self.delete_port(context, vm_link['vm_port_id'])
++        self.delete_port(context, vm_link['ovs_port_id'])
++        ovs_host = None
++        with context.session.begin(subtransactions=True):
++            vm_link['ovs_tunnel_id'] = self.tunnelkey.get(context.session, vm_link['ovs_port_id'])
++            self.tunnelkey.delete(context.session, vm_link['ovs_port_id'])
++            vm_link['vm_tunnel_id'] = self.tunnelkey.get(context.session, vm_link['vm_port_id'])
++            self.tunnelkey.delete(context.session, vm_link['vm_port_id'])
++            ovs_host = self._get_ovs_network_host_by_id(context, vm_link['ovs_network_id'])
++        if ovs_host:
++            self.notifier.vm_link_ovs_endpoint_deleted(context, vm_link, ovs_host)
++        status=vm_link.get('status')
++        if status == 'ACTIVE':
++            self.notifier.vm_link_vm_endpoint_deleted(context, vm_link, vm_link['vm_host'])
++    
++
++class OVSNetworkServerRpcCallbackMixin(object):
++    # we should add some function to sync states of ovs_network, vm_link and ovs_link in future
++    pass    
+diff --git a/neutron/extensions/ovsnetwork.py b/neutron/extensions/ovsnetwork.py
+new file mode 100644
+index 0000000..75befbb
+--- /dev/null
++++ b/neutron/extensions/ovsnetwork.py
+@@ -0,0 +1,299 @@
++# vim: tabstop=4 shiftwidth=4 softtabstop=4
++
++# Copyright 2012 Nicira Networks, Inc.
++# All rights reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++#
++# @author: Jian LI, BUPT
++#
++from abc import ABCMeta
++from abc import abstractmethod
++
++from oslo.config import cfg
++import six
++
++from neutron.api import extensions
++from neutron.api.v2 import attributes as attr
++from neutron.api.v2 import base
++from neutron.common import exceptions as qexception
++from neutron import manager
++
++class OVSNetworkNotFound(qexception.NotFound):
++    message = _("OVS Network %(id)s could not be found")
++
++class InvalidPortNum(qexception.InvalidInput):
++    message = _("Invalid value for port %(port)s")
++
++class OVSNetworkHasLinks(qexception.InUse):
++    message = _("OVS Network %(id)s has links")
++
++class VMLinkNotFound(qexception.NotFound):
++    message = _("VM Link %(id)s could not be found")
++
++class HostNotSetInVMLink(qexception.NotFound):
++    message = _("can not find vm_host in VMLink")
++
++class OVSLinkNotFound(qexception.NotFound):
++    message = _("OVS Link %(id)s could not be found")
++    
++def convert_to_validate_port_num(port):
++    if port is None:
++        return port
++    try:
++        val = int(port)
++    except (ValueError, TypeError):
++        raise InvalidPortNum(port=port)
++
++    if val >= 0 and val <= 65535:
++        return val
++    else:
++        raise InvalidPortNum(port=port)
++
++def convert_to_int_or_none(val):
++    if val is None:
++        return val
++    try:
++        val = int(val)
++    except (ValueError, TypeError):
++        return None
++    return val
++        
++RESOURCE_ATTRIBUTE_MAP = {
++    'ovs_networks' : {
++        'id': {'allow_post': False, 'allow_put': False,
++               'validate': {'type:uuid': None},
++               'is_visible': True,
++               'primary_key': True},
++        'name': {'allow_post': True, 'allow_put': True,
++                 'validate': {'type:string': None},
++                 'is_visible': True},
++        'tenant_id': {'allow_post': True, 'allow_put': False,
++                      'validate': {'type:string': None},
++                      'is_visible': True},
++        'host': {'allow_post': True, 'allow_put': False,
++                 'validate': {'type:string': None},
++                 'is_visible': True,
++                 'default': ''},
++        'controller_ipv4_address':{'allow_post': True, 
++                                   'allow_put': True,
++                                   'validate': {'type:ip_address_or_none': None},
++                                   'is_visible': True,
++                                   'default':None},
++        'controller_port_num':{'allow_post': True,
++                               'allow_put': True,
++                               'convert_to': convert_to_validate_port_num,
++                               'is_visible': True,
++                               'default':None}
++    },
++    'vm_links' : {
++        'id': {'allow_post': False, 'allow_put': False,
++               'validate': {'type:uuid': None},
++               'is_visible': True,
++               'primary_key': True},
++        'tenant_id': {'allow_post': True, 'allow_put': False,
++                      'validate': {'type:string': None},
++                      'is_visible': True},
++        'name': {'allow_post': True, 'allow_put': True,
++                 'validate': {'type:string': None},
++                 'is_visible': True,
++                 'default': ''},
++        'vm_host': {'allow_post': True, 'allow_put': True,
++                    'validate': {'type:string': None},
++                    'is_visible': True,
++                    'default': ''},
++        'vm_ofport': {'allow_post': True, 'allow_put': True,
++                      'convert_to': convert_to_int_or_none,
++                      'is_visible': True,
++                      'default': 65534},
++        'status': {'allow_post': True, 'allow_put': True,
++                   'validate': {'type:string': None},
++                   'is_visible': True,
++                   'default': 'PENDING'},
++        'ovs_network_id': {'allow_post': True, 'allow_put': True,
++                           'validate': {'type:string': None},
++                           'is_visible': True},
++        'ovs_network_name': {'allow_post': True, 'allow_put': True,
++                             'validate': {'type:string': None},
++                             'is_visible': True,
++                             'default': ''},
++        'vm_port_id': {'allow_post': False, 'allow_put': False,
++                       'validate': {'type:string': None},
++                       'is_visible': True},
++        'ovs_port_id': {'allow_post': False, 'allow_put': False,
++                        'validate': {'type:string': None},
++                        'is_visible': True},
++    },
++    'ovs_links' : {
++        'id': {'allow_post': False, 'allow_put': False,
++               'validate': {'type:uuid': None},
++               'is_visible': True,
++               'primary_key': True},
++          
++        'tenant_id': {'allow_post': True, 'allow_put': False,
++                      'validate': {'type:string': None},
++                      'is_visible': True},
++        'name': {'allow_post': True, 'allow_put': True,
++                 'validate': {'type:string': None},
++                 'is_visible': True,
++                 'default': ''},
++        'left_ovs_id': {'allow_post': True, 'allow_put': False,
++                        'validate': {'type:string': None},
++                        'is_visible': True},
++        'left_ovs_name': {'allow_post': True, 'allow_put': True,
++                          'validate': {'type:string': None},
++                          'is_visible': True,
++                          'default': ''},
++        'right_ovs_id': {'allow_post': True, 'allow_put': False,
++                         'validate': {'type:string': None},
++                         'is_visible': True},
++        'right_ovs_name': {'allow_post': True, 'allow_put': True,
++                           'validate': {'type:string': None},
++                           'is_visible': True,
++                           'default': ''},
++        'left_port_id': {'allow_post': False, 'allow_put': False,
++                         'validate': {'type:string': None},
++                         'is_visible': True},
++        'right_port_id': {'allow_post': False, 'allow_put': False,
++                          'validate': {'type:string': None},
++                          'is_visible': True},
++    }
++}
++
++#we need extend port resource and add connect_to_ovs action to it
++
++class Ovsnetwork(extensions.ExtensionDescriptor):
++    """OVS Network extension."""
++
++    @classmethod
++    def get_name(cls):
++        return "ovs-network"
++
++    @classmethod
++    def get_alias(cls):
++        return "ovs-network"
++
++    @classmethod
++    def get_description(cls):
++        return "The OVS Network extension."
++
++    @classmethod
++    def get_namespace(cls):
++        # todo
++        return "https://github.com/leejian0612/ryu-ovsnetwork/blob/master/README.md"
++
++    @classmethod
++    def get_updated(cls):
++        return "2014-10-08T19:55:00-00:00"
++        
++    @classmethod    
++    def get_resources(cls):
++        """Returns Ext Resources."""
++        my_plurals = [(key, key[:-1]) for key in RESOURCE_ATTRIBUTE_MAP.keys()]
++        attr.PLURALS.update(dict(my_plurals))
++        exts = []
++        plugin = manager.NeutronManager.get_plugin()
++        for resource_name in ['ovs_network', 'ovs_link', 'vm_link']:
++            collection_name = resource_name.replace('_', '-') + "s"
++            params = RESOURCE_ATTRIBUTE_MAP.get(resource_name + "s", dict())
++            #quota.QUOTAS.register_resource_by_name(resource_name)
++            controller = base.create_resource(collection_name,
++                                              resource_name,
++                                              plugin, params, allow_bulk=True,
++                                              allow_pagination=True,
++                                              allow_sorting=True)
++        
++            ex = extensions.ResourceExtension(collection_name,
++                                              controller,
++                                              attr_map=params)
++            exts.append(ex)
++
++        return exts
++
++    def get_extended_resources(self, version):
++        if version == "2.0":
++            #return dict(EXTENDED_ATTRIBUTES_2_0.items() +
++            #            RESOURCE_ATTRIBUTE_MAP.items())
++            return dict(RESOURCE_ATTRIBUTE_MAP.items())
++        else:
++            return {}  
++
++
++@six.add_metaclass(ABCMeta)
++class OVSNetworkPluginBase(object):
++
++    @abstractmethod
++    def get_ovs_networks(self, context, filters=None, fields=None,
++                        sorts=None, limit=None, marker=None,
++                        page_reverse=False):
++        pass    
++
++    @abstractmethod
++    def get_ovs_network(self, context, id, fields=None):
++        pass    
++
++    @abstractmethod
++    def create_ovs_network(self, context, ovs_network):
++        pass    
++        
++    @abstractmethod
++    def update_ovs_network(self, context, id, ovs_network):
++        pass   
++
++    @abstractmethod
++    def delete_ovs_network(self, context, id):
++        pass    
++
++    @abstractmethod
++    def get_vm_links(self, context, filters=None, fields=None,
++                     sorts=None, limit=None, marker=None,
++                     page_reverse=False):
++        pass    
++
++    @abstractmethod
++    def get_vm_link(self, context, id, fields=None):
++        pass    
++
++    @abstractmethod
++    def create_vm_link(self, context, vm_link):
++        pass    
++
++    @abstractmethod
++    def update_vm_link(self, context, id, vm_link):
++        pass   
++
++    @abstractmethod
++    def delete_vm_link(self, context, id):
++        pass    
++
++    @abstractmethod
++    def get_ovs_links(self, context, filters=None, fields=None,
++                      sorts=None, limit=None, marker=None,
++                      page_reverse=False):
++        pass    
++
++    @abstractmethod
++    def get_ovs_link(self, context, id, fields=None):
++        pass    
++
++    @abstractmethod
++    def create_ovs_link(self, context, ovs_link):
++        pass    
++
++    #@abstractmethod
++    #def update_ovs_link(self, context, id, ovs_link):
++    #    pass   
++
++    @abstractmethod
++    def delete_ovs_link(self, context, id):
++        pass    
+diff --git a/neutron/plugins/ml2/plugin.py b/neutron/plugins/ml2/plugin.py
+index a127407..97b4710 100644
+--- a/neutron/plugins/ml2/plugin.py
++++ b/neutron/plugins/ml2/plugin.py
+@@ -54,6 +54,7 @@ from neutron.plugins.ml2 import driver_context
+ from neutron.plugins.ml2 import managers
+ from neutron.plugins.ml2 import models
+ from neutron.plugins.ml2 import rpc
++from neutron.db import ovsnetwork_rpc_base
+ 
+ LOG = log.getLogger(__name__)
+ 
+@@ -67,7 +68,8 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
+                 sg_db_rpc.SecurityGroupServerRpcMixin,
+                 agentschedulers_db.DhcpAgentSchedulerDbMixin,
+                 addr_pair_db.AllowedAddressPairsMixin,
+-                extradhcpopt_db.ExtraDhcpOptMixin):
++                extradhcpopt_db.ExtraDhcpOptMixin,
++                ovsnetwork_rpc_base.OVSNetworkServerRpcMixin):
+ 
+     """Implement the Neutron L2 abstractions using modules.
+ 
+@@ -90,7 +92,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
+                                     "quotas", "security-group", "agent",
+                                     "dhcp_agent_scheduler",
+                                     "multi-provider", "allowed-address-pairs",
+-                                    "extra_dhcp_opt"]
++                                    "extra_dhcp_opt", "ovs-network"]
+ 
+     @property
+     def supported_extension_aliases(self):
+diff --git a/neutron/plugins/ml2/rpc.py b/neutron/plugins/ml2/rpc.py
+index 73f7b26..e2e4d14 100644
+--- a/neutron/plugins/ml2/rpc.py
++++ b/neutron/plugins/ml2/rpc.py
+@@ -28,6 +28,7 @@ from neutron.openstack.common import uuidutils
+ from neutron.plugins.ml2 import db
+ from neutron.plugins.ml2 import driver_api as api
+ from neutron.plugins.ml2.drivers import type_tunnel
++from neutron.agent import ovsnetwork_rpc_agent 
+ # REVISIT(kmestery): Allow the type and mechanism drivers to supply the
+ # mixins and eventually remove the direct dependencies on type_tunnel.
+ 
+@@ -205,7 +206,8 @@ class RpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
+ 
+ class AgentNotifierApi(proxy.RpcProxy,
+                        sg_rpc.SecurityGroupAgentRpcApiMixin,
+-                       type_tunnel.TunnelAgentRpcApiMixin):
++                       type_tunnel.TunnelAgentRpcApiMixin,
++                       ovsnetwork_rpc_agent.OVSNetworkAgentRpcApiMixin):
+     """Agent side of the openvswitch rpc API.
+ 
+     API version history:
+diff --git a/neutron/plugins/openvswitch/agent/ovs_neutron_agent.py b/neutron/plugins/openvswitch/agent/ovs_neutron_agent.py
+index 9d3bf1d..a820bb2 100644
+--- a/neutron/plugins/openvswitch/agent/ovs_neutron_agent.py
++++ b/neutron/plugins/openvswitch/agent/ovs_neutron_agent.py
+@@ -44,6 +44,7 @@ from neutron.openstack.common.rpc import dispatcher
+ from neutron.plugins.common import constants as p_const
+ from neutron.plugins.openvswitch.common import config  # noqa
+ from neutron.plugins.openvswitch.common import constants
++from neutron.agent import ovsnetwork_rpc_agent
+ 
+ 
+ LOG = logging.getLogger(__name__)
+@@ -121,8 +122,17 @@ class OVSSecurityGroupAgent(sg_rpc.SecurityGroupAgentRpcMixin):
+         self.init_firewall(defer_refresh_firewall=True)
+ 
+ 
++class OVSNetworkAgent(ovsnetwork_rpc_agent.OVSNetworkAgentRpcMixin):
++    def __init__(self, context, plugin_rpc, root_helper):
++        super(OVSNetworkAgent, self).__init__()
++        self.context = context
++        self.plgin_rpc =plugin_rpc
++        self.root_helper =root_helper
++
++
+ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
+-                      l2population_rpc.L2populationRpcCallBackMixin):
++                      l2population_rpc.L2populationRpcCallBackMixin,
++                      ovsnetwork_rpc_agent.OVSNetworkAgentRpcCallbackMixin):
+     '''Implements OVS-based tunneling, VLANs and flat networks.
+ 
+     Two local bridges are created: an integration bridge (defaults to
+@@ -232,6 +242,10 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
+         self.sg_agent = OVSSecurityGroupAgent(self.context,
+                                               self.plugin_rpc,
+                                               root_helper)
++        # ovs network agent support
++        self.ovs_network_agent = OVSNetworkAgent(self.context,
++                                                 self.plugin_rpc,
++                                                 root_helper)
+         # Initialize iteration counter
+         self.iter_num = 0
+         self.run_daemon_loop = True
+@@ -270,7 +284,16 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
+         consumers = [[topics.PORT, topics.UPDATE],
+                      [topics.NETWORK, topics.DELETE],
+                      [constants.TUNNEL, topics.UPDATE],
+-                     [topics.SECURITY_GROUP, topics.UPDATE]]
++                     [topics.SECURITY_GROUP, topics.UPDATE],
++                     ['ovs_network', topics.CREATE, cfg.CONF.host],
++                     ['ovs_network', topics.UPDATE, cfg.CONF.host],
++                     ['ovs_network', topics.DELETE, cfg.CONF.host],
++                     ['ovs_link', topics.CREATE, cfg.CONF.host],
++                     ['ovs_link', topics.DELETE, cfg.CONF.host],
++                     ['vm_link', topics.CREATE, cfg.CONF.host],
++                     ['vm_link', topics.UPDATE, cfg.CONF.host],
++                     ['vm_link', topics.DELETE, cfg.CONF.host]]
++                     
+         if self.l2_pop:
+             consumers.append([topics.L2POPULATION,
+                               topics.UPDATE, cfg.CONF.host])

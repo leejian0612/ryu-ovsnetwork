@@ -148,6 +148,14 @@ class OVSNetworkAgentRpcApiMixin(object):
             version=OVS_NETWORK_RPC_VERSION,
             topic=self._get_ovs_link_create_topic(host))
 
+    def vm_link_vm_endpoint_created(self, context, vm_link, host):
+        if not vm_link:
+            return
+        self.cast(context,
+            self.make_msg('vm_link_vm_endpoint_created', vm_link=vm_link),
+            version=OVS_NETWORK_RPC_VERSION,
+            topic=self._get_vm_link_create_topic(host))
+
     def vm_link_vm_endpoint_updated(self, context, vm_link, host):
         if not vm_link:
             return
@@ -155,6 +163,14 @@ class OVSNetworkAgentRpcApiMixin(object):
             self.make_msg('vm_link_vm_endpoint_updated', vm_link=vm_link),
             version=OVS_NETWORK_RPC_VERSION,
             topic=self._get_vm_link_update_topic(host))
+
+    def vm_link_vm_endpoint_deleted(self, context, vm_link, host):
+        if not vm_link:
+            return
+        self.cast(context,
+            self.make_msg('vm_link_vm_endpoint_deleted', vm_link=vm_link),
+            version=OVS_NETWORK_RPC_VERSION,
+            topic=self._get_vm_link_delete_topic(host))
 
     def vm_link_ovs_endpoint_created(self, context, vm_link, host):
         if not vm_link:
@@ -266,6 +282,18 @@ class OVSNetworkAgentRpcCallbackMixin(object):
             return self._ovs_network_agent_not_set()
         self.ovs_network_agent.ovs_link_right_endpoint_deleted(context, ovs_link)
 
+    def vm_link_vm_endpoint_created(self, context, **kwargs):
+        """Callback for vm link vm endpoint create.
+
+        :param vm_link: vm link
+        """
+        vm_link = kwargs.get('vm_link', {})
+        LOG.debug(
+            _("vm link %s vm endpoint created on remote: %s"), vm_link, cfg.CONF.host)
+        if not self.ovs_network_agent:
+            return self._ovs_network_agent_not_set()
+        self.ovs_network_agent.vm_link_vm_endpoint_created(context, vm_link)
+
     def vm_link_vm_endpoint_updated(self, context, **kwargs):
         """Callback for vm link vm endpoint update.
 
@@ -277,6 +305,18 @@ class OVSNetworkAgentRpcCallbackMixin(object):
         if not self.ovs_network_agent:
             return self._ovs_network_agent_not_set()
         self.ovs_network_agent.vm_link_vm_endpoint_updated(context, vm_link)
+
+    def vm_link_vm_endpoint_deleted(self, context, **kwargs):
+        """Callback for vm link vm endpoint delete.
+
+        :param vm_link: vm link
+        """
+        vm_link = kwargs.get('vm_link', {})
+        LOG.debug(
+            _("vm link %s vm endpoint delete on remote: %s"), vm_link, cfg.CONF.host)
+        if not self.ovs_network_agent:
+            return self._ovs_network_agent_not_set()
+        self.ovs_network_agent.vm_link_vm_endpoint_deleted(context, vm_link)
 
     def vm_link_ovs_endpoint_created(self, context, **kwargs):
         """Callback for vm link ovs endpoint create.
@@ -349,10 +389,20 @@ class OVSNetworkAgentRpcMixin(object):
             self.ovs_network_driver.ovs_link_right_endpoint_deleted(context, ovs_link)
         LOG.info(_("Delete right endpoint of ovs link %s by driver %s"), ovs_link, self.ovs_network_driver)
 
+    def vm_link_vm_endpoint_created(self, context, vm_link):
+        if self.ovs_network_driver:
+            self.ovs_network_driver.vm_link_vm_endpoint_created(context, vm_link)
+        LOG.info(_("Create vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
+
     def vm_link_vm_endpoint_updated(self, context, vm_link):
         if self.ovs_network_driver:
             self.ovs_network_driver.vm_link_vm_endpoint_updated(context, vm_link)
         LOG.info(_("Update vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
+
+    def vm_link_vm_endpoint_deleted(self, context, vm_link):
+        if self.ovs_network_driver:
+            self.ovs_network_driver.vm_link_vm_endpoint_deleted(context, vm_link)
+        LOG.info(_("Delete vm endpoint of vm link %s by driver %s"), vm_link, self.ovs_network_driver)
 
     def vm_link_ovs_endpoint_created(self, context, vm_link):
         if self.ovs_network_driver:

@@ -259,7 +259,7 @@ class Client(object):
                      'packet_filters': 'packet_filter',
                      'ovs_networks': 'ovs_network',
                      'ovs_links': 'ovs_link',
-                     'vm_links': 'vm_link'
+                     'vm_links': 'vm_link',
                      }
     # 8192 Is the default max URI len for eventlet.wsgi.server
     MAX_URI_LEN = 8192
